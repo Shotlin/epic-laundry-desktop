@@ -1,0 +1,127 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS - Buying and Supply Chain</title>
+<style>
+  :root{--bg:#0b0d13;--card:#141826;--ink:#eef1f7;--muted:#8b93a7;--brand:#6d8bff;--brand2:#a06bff;--ok:#3ecf8e;--warn:#ffb454;--line:#222838}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(1200px 600px at 70% -10%,#1a2036 0%,var(--bg) 55%);color:var(--ink);min-height:100vh}
+  header{padding:14px 22px;display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--line)}
+  header a{color:var(--muted);text-decoration:none}
+  main{padding:20px;display:grid;grid-template-columns:1fr 1.2fr;gap:18px;max-width:1200px;margin:0 auto}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,0)) ,var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+  h2{margin:0 0 12px;font-size:15px}
+  label{display:block;color:var(--muted);font-size:12px;margin:8px 0 3px}
+  input,select,textarea{width:100%;background:#0c0f18;border:1px solid #2a3145;color:var(--ink);border-radius:10px;padding:9px;font-size:14px}
+  button{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border:0;border-radius:10px;padding:9px 14px;cursor:pointer;font-weight:600;margin-top:8px}
+  button.ok{background:linear-gradient(135deg,var(--ok),#2bbf7e)}button.ghost{background:#222a3c;color:var(--ink)}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--muted);font-weight:500}
+  .tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .tabs button{background:#222a3c;color:var(--muted);border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
+  .tabs button.on{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff}
+  .hide{display:none}
+  .row{display:flex;gap:8px;margin-top:6px}
+</style>
+</head>
+<body>
+<header><a href="/ui/">- Epic BOS</a><b>Buying and Supply Chain</b></header>
+<main>
+  <div class="card">
+    <div class="tabs">
+      <button class="on" onclick="show('po',this)">Purchase Order</button>
+      <button onclick="show('rfq',this)">RFQ</button>
+      <button onclick="show('qa',this)">Quality</button>
+      <button onclick="show('pl',this)">Price List</button>
+    </div>
+    <div id="po">
+      <label>Supplier</label><select id="po-sup"></select>
+      <label>Schedule date</label><input id="po-date" type="date"/>
+      <div id="po-items"></div>
+      <button class="ghost" onclick="addPoRow()">+ Add item</button>
+      <button class="ok" onclick="savePO()">Create and Submit PO</button>
+    </div>
+    <div id="rfq" class="hide">
+      <label>Supplier</label><select id="rfq-sup"></select>
+      <label>Validity date</label><input id="rfq-valid" type="date"/>
+      <div id="rfq-items"></div>
+      <button class="ghost" onclick="addRfqRow()">+ Add item</button>
+      <button class="ok" onclick="saveRFQ()">Create and Submit RFQ</button>
+    </div>
+    <div id="qa" class="hide">
+      <label>Purchase Invoice</label><select id="qa-inv"></select>
+      <label>Item</label><select id="qa-item"></select>
+      <label>Qty received</label><input id="qa-qty" type="number"/>
+      <label>Accepted</label><input id="qa-acc" type="number"/>
+      <label>Rejected</label><input id="qa-rej" type="number"/>
+      <label>Status</label><select id="qa-st"><option>Pass</option><option>Fail</option><option>Partial</option></select>
+      <label>Remarks</label><textarea id="qa-rm" rows="2"></textarea>
+      <button class="ok" onclick="saveQA()">Record Inspection</button>
+    </div>
+    <div id="pl" class="hide">
+      <label>Name</label><input id="pl-name"/>
+      <label>Type</label><select id="pl-type"><option>Buying</option><option>Selling</option></select>
+      <div id="pl-items"></div>
+      <button class="ghost" onclick="addPlRow()">+ Add item</button>
+      <button class="ok" onclick="savePL()">Save Price List</button>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Purchase Orders</h2>
+    <table id="poGrid"><thead><tr><th>PO</th><th>Supplier</th><th>Total</th><th>Status</th></tr></thead><tbody></tbody></table>
+    <h2 style="margin-top:14px">Recent RFQs / Inspections / Price Lists</h2>
+    <table id="aux"><thead><tr><th>Type</th><th>Ref</th><th>Status</th></tr></thead><tbody></tbody></table>
+  </div>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+let ITEMS=[],SUP=[],INV=[];
+function show(m,btn){document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');['po','rfq','qa','pl'].forEach(id=>document.getElementById(id).classList.toggle('hide',id!==m));}
+function itemOpts(){return ITEMS.map(i=>`<option value="${i.id}">${i.data.name}</option>`).join('');}
+async function init(){
+  ITEMS=await api('/item');SUP=await api('/party');INV=await api('/purchase_invoice');
+  const supOpts=SUP.filter(p=>p.data.is_supplier).map(s=>`<option value="${s.id}">${s.data.name}</option>`).join('');
+  posup.innerHTML=supOpts; rfqsup.innerHTML=supOpts;
+  qaitem.innerHTML=itemOpts();
+  qainv.innerHTML=INV.map(r=>`<option value="${r.id}">${r.name}</option>`).join('');
+  addPoRow();addRfqRow();addPlRow();
+  await loadGrids();
+}
+function addPoRow(){poitems.insertAdjacentHTML('beforeend',`<div class="row"><select class="it">${itemOpts()}</select><input class="q" type="number" placeholder="qty"/><input class="r" type="number" placeholder="rate"/><input class="g" type="number" placeholder="gst%" value="18"/></div>`);}
+function addRfqRow(){rfqitems.insertAdjacentHTML('beforeend',`<div class="row"><select class="it">${itemOpts()}</select><input class="q" type="number" placeholder="qty"/><input class="tr" type="number" placeholder="target rate"/></div>`);}
+function addPlRow(){plitems.insertAdjacentHTML('beforeend',`<div class="row"><select class="it">${itemOpts()}</select><input class="r" type="number" placeholder="rate"/></div>`);}
+async function savePO(){
+  const items=[...poitems.querySelectorAll('.row')].map(r=>({item:r.querySelector('.it').value,qty:Number(r.querySelector('.q').value),rate:Number(r.querySelector('.r').value||0),gst_rate:Number(r.querySelector('.g').value||0)}));
+  if(!items.length||items.some(i=>!i.item||!i.qty)){alert('Add item + qty');return;}
+  const r=await api('/purchase_order',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:{supplier:posup.value,schedule_date:podate.value,items}})});
+  if(r.error){alert(r.error);return;}await api('/purchase_order/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});alert('PO '+r.name+' created');loadGrids();
+}
+async function saveRFQ(){
+  const items=[...rfqitems.querySelectorAll('.row')].map(r=>({item:r.querySelector('.it').value,qty:Number(r.querySelector('.q').value),target_rate:Number(r.querySelector('.tr').value||0)}));
+  const r=await api('/request_for_quotation',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:{supplier:rfqsup.value,validity_date:rfqvalid.value,items}})});
+  if(r.error){alert(r.error);return;}await api('/request_for_quotation/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});alert('RFQ '+r.name);loadGrids();
+}
+async function saveQA(){
+  const r=await api('/quality_inspection',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:{reference:qainv.value,item:qaitem.value,qty:Number(qaqty.value||0),accepted_qty:Number(qaacc.value||0),rejected_qty:Number(qarej.value||0),status:qast.value,remarks:qarm.value}})});
+  if(r.error){alert(r.error);return;}if(r.id)await api('/quality_inspection/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});alert('Inspection '+r.name);loadGrids();
+}
+async function savePL(){
+  const items=[...plitems.querySelectorAll('.row')].map(r=>({item:r.querySelector('.it').value,rate:Number(r.querySelector('.r').value||0)}));
+  const r=await api('/price_list',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:{name:plname.value,type:pltype.value,items}})});
+  if(r.error){alert(r.error);return;}alert('Price list '+r.name);loadGrids();
+}
+async function loadGrids(){
+  const pos=await api('/purchase_order');const tb=document.querySelector('#poGrid tbody');tb.innerHTML='';
+  for(const r of pos.reverse()){const tr=document.createElement('tr');tr.innerHTML=`<td>${r.name}</td><td>${(SUP.find(s=>s.id===r.data.supplier)?.data?.name)||''}</td><td>INR ${r.data.grand_total||''}</td><td>${r.status}</td>`;tb.appendChild(tr);}
+  const aux=document.querySelector('#aux tbody');aux.innerHTML='';
+  for(const r of (await api('/request_for_quotation')).reverse())aux.insertAdjacentHTML('beforeend',`<tr><td>RFQ</td><td>${r.name}</td><td>${r.status}</td></tr>`);
+  for(const r of (await api('/quality_inspection')).reverse())aux.insertAdjacentHTML('beforeend',`<tr><td>QA</td><td>${r.name}</td><td>${r.data.status||''}</td></tr>`);
+  for(const r of (await api('/price_list')).reverse())aux.insertAdjacentHTML('beforeend',`<tr><td>PriceList</td><td>${r.data.name}</td><td>${r.data.type}</td></tr>`);
+}
+init();
+</script>
+</body>
+</html>

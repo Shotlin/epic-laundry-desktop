@@ -1,0 +1,47 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS - Customer Portal</title>
+<style>
+  :root{--bg:#0f1117;--card:#1a1d27;--ink:#e7e9ee;--muted:#9aa1b2;--brand:#5b8cff;--ok:#3ecf8e}
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(1000px 500px at 50% -10%,#1b2236,#0f1117);color:var(--ink);min-height:100vh;padding:24px}
+  .wrap{max-width:760px;margin:0 auto}
+  h1{font-size:20px} .muted{color:var(--muted)}
+  .card{background:var(--card);border:1px solid #232735;border-radius:14px;padding:18px;margin-top:14px}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #232735}
+  button{background:linear-gradient(135deg,var(--brand),#7a5bff);color:#fff;border:0;border-radius:10px;padding:10px 16px;cursor:pointer;font-weight:600;margin-top:8px}
+  #pay{margin-top:14px;color:var(--ok);word-break:break-all}
+  input{width:100%;background:#0c0f18;border:1px solid #2a3145;color:var(--ink);border-radius:10px;padding:10px}
+  .pill{display:inline-block;background:#0c0f18;border:1px solid #2a3145;border-radius:999px;padding:4px 10px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Epic BOS — Customer Portal</h1>
+  <div class="card">
+    <label class="muted">Your customer ID</label>
+    <input id="cid" placeholder="paste your ID (e.g. PRT-00001)"/>
+    <button onclick="load()">View my invoices</button>
+  </div>
+  <div id="out"></div>
+</div>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+(async()=>{const p=new URLSearchParams(location.search).get('c');if(p){cid.value=p;await load();}})();
+async function load(){
+  const id=cid.value.trim();if(!id){alert('Enter your customer ID');return;}
+  const d=await api('/portal/'+encodeURIComponent(id));
+  if(d.error){out.innerHTML=`<div class="card">${d.error}</div>`;return;}
+  const rows=d.invoices.map(i=>`<tr><td>${i.name}</td><td>${i.date}</td><td>INR ${i.grand_total}</td><td>INR ${i.balance}</td><td><button onclick="pay('${i.name}',${i.balance})">Pay</button></td></tr>`).join('')||'<tr><td colspan="5" class="muted">No outstanding invoices 🎉</td></tr>';
+  out.innerHTML=`<div class="card"><b>${d.customer.name}</b> ${d.customer.gstin?'<span class="pill">'+d.customer.gstin+'</span>':''}<div style="margin-top:8px">Outstanding: <b>INR ${d.total_outstanding}</b></div></div>
+  <div class="card"><table><thead><tr><th>Invoice</th><th>Date</th><th>Total</th><th>Due</th><th></th></tr></thead><tbody>${rows}</tbody></table><div id="pay" style="margin-top:12px;color:var(--ok);word-break:break-all"></div></div>`;
+}
+async function pay(name,amt){const r=await api('/payments/link',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({amount:amt,description:name})});const link=r.intent||JSON.stringify(r.payload);document.getElementById('pay').innerHTML=`Pay INR ${amt}: <a href="${r.intent||'#'}" style="color:var(--ok)">${r.method==='razorpay'?'Razorpay checkout':'UPI / WhatsApp Pay'}</a><br><code>${link}</code>`;}
+
+</script>
+</body>
+</html>

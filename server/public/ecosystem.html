@@ -1,0 +1,86 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS - Platform & Ecosystem</title>
+<style>
+  :root{--bg:#0b0d13;--card:#141826;--ink:#eef1f7;--muted:#8b93a7;--brand:#6d8bff;--brand2:#a06bff;--ok:#3ecf8e;--warn:#ffb454;--line:#222838}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(1200px 600px at 70% -10%,#1a2036 0%,var(--bg) 55%);color:var(--ink);min-height:100vh}
+  header{padding:14px 22px;display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--line)}
+  header a{color:var(--muted);text-decoration:none}
+  main{padding:20px;display:grid;grid-template-columns:1fr 1.2fr;gap:18px;max-width:1200px;margin:0 auto}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,0)) ,var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+  h2{margin:0 0 12px;font-size:15px}
+  label{display:block;color:var(--muted);font-size:12px;margin:8px 0 3px}
+  input,select,textarea{width:100%;background:#0c0f18;border:1px solid #2a3145;color:var(--ink);border-radius:10px;padding:9px;font-size:14px}
+  button{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border:0;border-radius:10px;padding:9px 14px;cursor:pointer;font-weight:600;margin-top:8px}
+  button.ok{background:linear-gradient(135deg,var(--ok),#2bbf7e)}button.ghost{background:#222a3c;color:var(--ink)}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--muted);font-weight:500}
+  .tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .tabs button{background:#222a3c;color:var(--muted);border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
+  .tabs button.on{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff}
+  .hide{display:none}
+  .out{margin-top:10px;color:var(--ok);word-break:break-all}
+</style>
+</head>
+<body>
+<header><a href="/ui/">- Epic BOS</a><b>Platform & Ecosystem</b></header>
+<main>
+  <div class="card">
+    <div class="tabs">
+      <button class="on" onclick="show('rbac',this)">RBAC</button>
+      <button onclick="show('pay',this)">Payments</button>
+      <button onclick="show('mkt',this)">Marketplace</button>
+      <button onclick="show('rpa',this)">RPA</button>
+    </div>
+    <div id="rbac">
+      <label>Username</label><input id="u-name"/>
+      <label>Role</label><select id="u-role"><option>admin</option><option>accountant</option><option>sales</option><option>cashier</option><option>viewer</option></select>
+      <button class="ok" onclick="saveUser()">Add User</button>
+      <hr style="border-color:var(--line);margin:14px 0">
+      <label>Entity</label><input id="c-ent" value="payment_entry"/>
+      <label>Action</label><select id="c-act"><option>read</option><option>write</option><option>submit</option><option>cancel</option></select>
+      <label>Role</label><select id="c-role"><option>admin</option><option>accountant</option><option>sales</option><option>cashier</option><option>viewer</option></select>
+      <button class="ghost" onclick="check()">Check permission</button>
+      <div id="rbac-out" class="out"></div>
+    </div>
+    <div id="pay" class="hide">
+      <label>Amount</label><input id="p-amt" type="number" value="1000"/>
+      <label>Description</label><input id="p-desc" value="Invoice payment"/>
+      <button class="ok" onclick="genLink()">Generate Payment Link</button>
+      <div id="pay-out" class="out"></div>
+    </div>
+    <div id="mkt" class="hide">
+      <label>App name</label><input id="m-name"/>
+      <label>Module key</label><input id="m-mod" placeholder="restaurant"/>
+      <label>Price</label><input id="m-price" type="number" value="0"/>
+      <button class="ok" onclick="addApp()">Publish App</button>
+    </div>
+    <div id="rpa" class="hide">
+      <label>Bot</label><select id="r-bot"><option>send-reminder</option><option>reconcile-bank</option><option>generate-gstr1</option></select>
+      <button class="ok" onclick="run()">Run Bot</button>
+      <div id="rpa-out" class="out"></div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Users</h2><table id="uGrid"><thead><tr><th>User</th><th>Role</th></tr></thead><tbody></tbody></table>
+    <h2 style="margin-top:14px">Marketplace Apps</h2><table id="aGrid"><thead><tr><th>App</th><th>Module</th><th>Price</th></tr></thead><tbody></tbody></table>
+  </div>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+function show(m,btn){document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');['rbac','pay','mkt','rpa'].forEach(id=>document.getElementById(id).classList.toggle('hide',id!==m));}
+async function saveUser(){const r=await api('/user',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:{username:uname.value,role:urole.value,active:true}})});if(r.error){alert(r.error);return;}await load();}
+async function check(){const r=await api('/rbac/check?entity='+encodeURIComponent(cent.value)+'&action='+cact.value+'&role='+crole.value);rbacout.textContent=`${r.role} ${r.action} on ${r.entity}: ${r.allowed?'ALLOWED':'DENIED'}`;}
+async function genLink(){const r=await api('/payments/link',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({amount:Number(pamt.value||0),description:pdesc.value})});payout.textContent=(r.method==='razorpay'?'Razorpay: ':'UPI: ')+(r.intent||JSON.stringify(r.payload));}
+async function addApp(){const r=await api('/app_def',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:{name:mname.value,module:mmod.value,price:Number(mpre.value||0)}})});if(r.error){alert(r.error);return;}await load();}
+async function run(){const r=await api('/rpa/run',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({bot:rbot.value,input:{}})});rpaout.textContent=`Bot ${rbot.value} queued (event ${r.event})`;}
+async function load(){const u=await api('/user');const g=document.querySelector('#uGrid tbody');g.innerHTML='';for(const r of u.reverse())g.insertAdjacentHTML('beforeend',`<tr><td>${r.data.username}</td><td>${r.data.role}</td></tr>`);const a=await api('/marketplace/apps');const g2=document.querySelector('#aGrid tbody');g2.innerHTML='';for(const r of a)g2.insertAdjacentHTML('beforeend',`<tr><td>${r.name}</td><td>${r.module}</td><td>INR ${r.price||0}</td></tr>`);}
+load();
+</script>
+</body>
+</html>

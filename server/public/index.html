@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<link rel="manifest" href="/ui/manifest.webmanifest"/>
+<link rel="stylesheet" href="/ui/assets/epic-ui.css"/>
+<title>Epic BOS — Dashboard</title>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar"></aside>
+  <div class="main">
+    <header class="topbar">
+      <div class="tb-left">
+        <button class="icon-btn only-mobile" onclick="document.body.classList.toggle('nav-open')">☰</button>
+        <div>
+          <h1 id="greeting">Good day 👋</h1>
+          <div class="hint" id="subtitle">Here's how your business is doing today</div>
+        </div>
+      </div>
+      <div class="tb-right">
+        <span class="chip" id="fy"></span>
+        <span class="chip" id="env">connecting…</span>
+        <span id="native-bar" style="display:none;gap:6px">
+          <button class="btn ghost sm" onclick="epicBackup()" title="Backup (Ctrl+Shift+B)">💾</button>
+          <button class="btn ghost sm" onclick="epicPdf()" title="Export PDF (Ctrl+P)">🖨</button>
+        </span>
+        <a class="btn sm" href="/ui/pos.html">＋ New Sale</a>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- KPI ROW -->
+      <section class="kpi-row" id="kpis"></section>
+
+      <!-- PRIMARY CHARTS -->
+      <section class="grid-2">
+        <div class="card">
+          <div class="card-head"><h2>Revenue — last 14 days</h2><span class="hint" id="rev-sum"></span></div>
+          <div id="chart-revenue" class="chart"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Payment mix</h2><span class="hint">by value</span></div>
+          <div id="chart-payments" class="chart"></div>
+        </div>
+      </section>
+
+      <!-- SECONDARY -->
+      <section class="grid-3">
+        <div class="card">
+          <div class="card-head"><h2>Top products</h2><span class="hint">by revenue</span></div>
+          <div id="chart-top"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Busy hours</h2><span class="hint">orders by hour</span></div>
+          <div id="chart-hours"></div>
+          <div class="card-head" style="margin-top:16px"><h2>Cash cycle</h2></div>
+          <div class="split-stat">
+            <div><span class="hint">Receivable</span><b id="m-recv" class="up">–</b></div>
+            <div><span class="hint">Payable</span><b id="m-pay" class="down">–</b></div>
+            <div><span class="hint">GST payable</span><b id="m-gst">–</b></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Needs attention</h2><span class="chip warn" id="alert-count">0</span></div>
+          <div id="alerts" class="alert-list"></div>
+          <button class="btn ghost sm" style="margin-top:10px;width:100%" onclick="syncAlerts()">🔔 Sync to notifications</button>
+        </div>
+      </section>
+
+      <!-- MODULE LAUNCHER -->
+      <section class="card">
+        <div class="card-head"><h2>All modules</h2><span class="hint">jump anywhere</span></div>
+        <div class="tiles" id="tiles"></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script src="/ui/assets/epic-ui.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+$('sidebar').innerHTML = Epic.sidebar('/ui/');
+
+// Greeting by time of day (India context)
+(function(){ const h = new Date().getHours(); const g = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; $('greeting').textContent = `${g} 👋`;
+  const now = new Date(); const fy = now.getMonth() >= 3 ? `${now.getFullYear()}-${(now.getFullYear()+1)%100}` : `${now.getFullYear()-1}-${now.getFullYear()%100}`;
+  $('fy').textContent = 'FY ' + fy; })();
+
+const MODULES = [
+  ['/ui/pos.html','🧾','POS Billing'],['/ui/invoices.html','📄','Invoices'],['/ui/crm.html','🤝','CRM'],
+  ['/ui/engage.html','💬','Engagement'],['/ui/inventory.html','📦','Inventory'],['/ui/buying.html','📝','Buying'],
+  ['/ui/purchases.html','🛒','Purchases'],['/ui/selling.html','📈','Selling'],['/ui/manufacturing.html','🏭','Manufacturing'],
+  ['/ui/accounting.html','📒','Accounting'],['/ui/banking.html','🏦','Banking'],['/ui/gst.html','🏛️','GST'],
+  ['/ui/compliance.html','⚖️','Compliance'],['/ui/returns.html','↩','Returns'],['/ui/hr.html','👥','HR & Payroll'],
+  ['/ui/projects.html','📋','Projects'],['/ui/assets.html','🏗️','Assets'],['/ui/ai.html','✨','Epic AI'],
+  ['/ui/ops.html','⚙️','Operations'],['/ui/multi-entity.html','🌐','Multi-entity'],['/ui/migration.html','📥','Migration'],
+  ['/ui/ecosystem.html','🧩','Platform'],['/ui/portal.html','🔗','Portal'],
+];
+$('tiles').innerHTML = MODULES.map(([h,i,l]) => `<a class="tile" href="${h}"><span class="tile-ico">${i}</span><span>${l}</span></a>`).join('');
+
+async function load(){
+  let d;
+  try { d = await Epic.api('/dashboard/summary'); }
+  catch(e){ $('env').textContent = 'API error'; $('env').className='chip bad'; return; }
+  $('env').textContent = 'Live'; $('env').className = 'chip ok';
+
+  const k = d.kpis, f = d.finance;
+  const spark = d.revenueSeries.map(r => r.revenue);
+  $('kpis').innerHTML = '';
+  Epic.kpi($('kpis'), { label:"Today's sales", value: Epic.inr(k.today), foot: k.ordersToday + ' orders', icon:'🛍️', spark });
+  Epic.kpi($('kpis'), { label:'This month', value: Epic.inr(k.mtd), delta: k.momPct, foot:'vs last month', icon:'📈' });
+  Epic.kpi($('kpis'), { label:'Avg order value', value: Epic.inr(k.avgOrder), foot: k.mtdOrders + ' orders MTD', icon:'🧮' });
+  Epic.kpi($('kpis'), { label:'Cash in hand', value: Epic.inr(f.cash_position), icon:'💰', tone: f.cash_position>=0?'up':'down' });
+  Epic.kpi($('kpis'), { label:'Net profit', value: Epic.inr(f.net_profit), icon:'✅', tone: f.net_profit>=0?'up':'down' });
+
+  Epic.lineChart($('chart-revenue'), d.revenueSeries, { x:'label', y:'revenue', color:'var(--brand)' });
+  $('rev-sum').textContent = Epic.inr(d.revenueSeries.reduce((a,r)=>a+r.revenue,0)) + ' total';
+  Epic.donut($('chart-payments'), d.paymentMix, { label:'mode', value:'value', money:true, centerLabel:'sales' });
+  Epic.barChart($('chart-top'), d.topItems, { label:'name', value:'revenue', horizontal:true, money:true });
+  Epic.heat($('chart-hours'), d.ordersByHour, { value:'orders' });
+
+  $('m-recv').textContent = Epic.inr(f.receivables);
+  $('m-pay').textContent = Epic.inr(f.payables);
+  $('m-gst').textContent = Epic.inr(f.gst_payable);
+
+  const alerts = [];
+  const c = d.alertCounts || {};
+  if (c.overdue) alerts.push(['💸', `${c.overdue} overdue receivable(s)`, 'warn']);
+  if (c.reorder) alerts.push(['📦', `${c.reorder} item(s) below reorder level`, 'warn']);
+  if (c.gst) alerts.push(['🏛️', `${c.gst} GST due date(s) this month`, 'bad']);
+  if (c.subscriptions) alerts.push(['🔁', `${c.subscriptions} subscription renewal(s) due`, 'info']);
+  if (c.budgets) alerts.push(['📊', `${c.budgets} budget breach(es)`, 'warn']);
+  (d.anomalies||[]).slice(0,3).forEach(a => alerts.push(['⚠️', a, 'bad']));
+  const total = alerts.length;
+  $('alert-count').textContent = total;
+  $('alerts').innerHTML = total ? alerts.map(([i,t,tone]) => `<div class="alert-item ${tone}"><span>${i}</span><span>${t}</span></div>`).join('') : '<div class="empty">All clear 🎉</div>';
+}
+
+async function syncAlerts(){ const r = await Epic.api('/notifications/sync-alerts',{method:'POST',body:'{}'}); Epic.toast(`Synced ${r.created} alert(s) to notifications`, 'ok'); }
+
+// Native desktop bridge
+if (window.epic) {
+  $('native-bar').style.display='inline-flex';
+  $('env').title = 'Desktop v'+(window.epic.version||'')+' · '+window.epic.platform;
+}
+async function epicBackup(){ if(!window.epic)return; const r=await window.epic.backup(); if(r&&r.ok)Epic.toast('Backup saved',' ok'); }
+async function epicPdf(){ if(!window.epic)return; await window.epic.exportPdf('EpicBOS-Dashboard'); }
+
+load();
+if ('serviceWorker' in navigator) { window.addEventListener('load', () => navigator.serviceWorker.register('/ui/sw.js').catch(()=>{})); }
+</script>
+</body>
+</html>

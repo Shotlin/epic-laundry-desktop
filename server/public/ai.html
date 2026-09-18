@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS — Epic AI</title>
+<style>
+  :root{--bg:#0b0d13;--card:#141826;--ink:#eef1f7;--muted:#8b93a7;--brand:#6d8bff;--brand2:#a06bff;--ok:#3ecf8e;--warn:#ffb454;--bad:#ff6b6b;--line:#222838}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(1200px 600px at 70% -10%,#1a2036 0%,var(--bg) 55%);color:var(--ink);min-height:100vh}
+  header{padding:14px 22px;display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--line)}
+  header a{color:var(--muted);text-decoration:none}
+  main{padding:20px;max-width:1100px;margin:0 auto}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px}
+  .kpi{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,0)) ,var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+  .kpi .l{color:var(--muted);font-size:12px}.kpi .v{font-size:22px;font-weight:800;margin-top:4px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-top:18px}
+  h2{margin:0 0 12px;font-size:15px}
+  .chat{background:#0c0f18;border:1px solid var(--line);border-radius:12px;padding:12px;height:240px;overflow:auto;font-size:13px;white-space:pre-wrap}
+  .row{display:flex;gap:8px;margin-top:10px}
+  input{flex:1;background:#0c0f18;border:1px solid #2a3145;color:var(--ink);border-radius:10px;padding:10px}
+  button{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border:0;border-radius:10px;padding:10px 16px;cursor:pointer;font-weight:600}
+  .me{color:var(--brand)}.ai{color:var(--ok)}.mode{color:var(--muted);font-size:11px}
+  .anom{color:var(--warn)}
+</style>
+</head>
+<body>
+<header><a href="/ui/">← Epic BOS</a><b>✨ Epic AI</b> <span style="color:var(--muted)">insights · forecast · assistant</span></header>
+<main>
+  <div class="grid" id="kpis"></div>
+  <div class="card">
+    <h2>Business Assistant</h2>
+    <div class="chat" id="chat">Ask: "What are my outstanding receivables?", "Show anomalies", "What's my cash position?", "Top items?"</div>
+    <div class="row"><input id="q" placeholder="Ask your business anything…" onkeydown="if(event.key==='Enter')ask()"/><button onclick="ask()">Ask</button></div>
+  </div>
+  <div class="card">
+    <h2>Anomalies &amp; attention</h2>
+    <div id="anom" style="font-size:13px"></div>
+    <h2 style="margin-top:14px">Top selling items</h2>
+    <div id="top" style="font-size:13px"></div>
+  </div>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+function money(n){return '₹'+(Math.round(n*100)/100).toLocaleString('en-IN');}
+async function load(){
+  const d=await api('/ai/insights');
+  const kpis=[
+    {l:'Sales',v:money(d.total_sales)},{l:'Purchases',v:money(d.total_purchase)},
+    {l:'Receivables',v:money(d.outstanding_receivables)},{l:'Payables',v:money(d.outstanding_payables)},
+    {l:'Cash Position',v:money(d.cash_position)},{l:'GST Payable',v:money(d.gst_payable)},
+    {l:'Net Profit',v:money(d.net_profit)},{l:'Total Assets',v:money(d.total_assets)},
+  ];
+  kpis_el.innerHTML=kpis.map(k=>`<div class="kpi"><div class="l">${k.l}</div><div class="v">${k.v}</div></div>`).join('');
+  anom.innerHTML=d.anomalies.length?d.anomalies.map(a=>`<div class="anom">• ${a}</div>`).join(''):'<div class="mode">No anomalies — books look clean.</div>';
+  top.innerHTML=d.top_items.length?d.top_items.map(t=>`<div>• ${t.name}: ${t.qty} units</div>`).join(''):'<div class="mode">No sales yet.</div>';
+}
+async function ask(){
+  const txt=q.value.trim();if(!txt)return;
+  chat.innerHTML+=`<div class="me">You: ${txt}</div>`;q.value='';
+  const r=await api('/ai/ask',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({question:txt})});
+  chat.innerHTML+=`<div class="ai">Epic AI: ${r.answer}</div><div class="mode">mode: ${r.mode||'heuristic'}</div>`;
+  chat.scrollTop=chat.scrollHeight;
+}
+load();
+</script>
+</body>
+</html>

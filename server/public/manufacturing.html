@@ -1,0 +1,139 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS - Manufacturing</title>
+<style>
+  :root{--bg:#0b0d13;--card:#141826;--ink:#eef1f7;--muted:#8b93a7;--brand:#6d8bff;--brand2:#a06bff;--ok:#3ecf8e;--warn:#ffb454;--line:#222838}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(1200px 600px at 70% -10%,#1a2036 0%,var(--bg) 55%);color:var(--ink);min-height:100vh}
+  header{padding:14px 22px;display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--line)}
+  header a{color:var(--muted);text-decoration:none}
+  main{padding:20px;display:grid;grid-template-columns:1fr 1.2fr;gap:18px;max-width:1200px;margin:0 auto}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,0)) ,var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+  h2{margin:0 0 12px;font-size:15px}
+  label{display:block;color:var(--muted);font-size:12px;margin:8px 0 3px}
+  input,select,textarea{width:100%;background:#0c0f18;border:1px solid #2a3145;color:var(--ink);border-radius:10px;padding:9px;font-size:14px}
+  button{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border:0;border-radius:10px;padding:9px 14px;cursor:pointer;font-weight:600;margin-top:8px}
+  button.ok{background:linear-gradient(135deg,var(--ok),#2bbf7e)}button.ghost{background:#222a3c;color:var(--ink)}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--muted);font-weight:500}
+  .tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .tabs button{background:#222a3c;color:var(--muted);border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
+  .tabs button.on{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff}
+  .hide{display:none}
+  .row{display:flex;gap:8px;margin-top:6px}
+  .muted{color:var(--muted)}
+  .pill{display:inline-block;background:#222a3c;color:var(--muted);border-radius:999px;padding:2px 10px;font-size:12px;margin:2px}
+</style>
+</head>
+<body>
+<header><a href="/ui/">- Epic BOS</a><b>Manufacturing</b></header>
+<main>
+  <div class="card">
+    <div class="tabs">
+      <button class="on" onclick="show('bom',this)">BOM</button>
+      <button onclick="show('wo',this)">Work Order</button>
+      <button onclick="show('mfg',this)">Produce</button>
+      <button onclick="show('cost',this)">BOM Cost</button>
+      <button onclick="show('plan',this)">MRP Plan</button>
+      <button onclick="show('setup',this)">Setup</button>
+    </div>
+
+    <div id="bom">
+      <label>Finished Item</label><select id="b-item"></select>
+      <label>Quantity (per BOM)</label><input id="b-qty" type="number" value="1"/>
+      <label class="row" style="margin:8px 0"><input type="checkbox" id="b-sub" style="width:auto;margin-right:8px"/>Subcontracted</label>
+      <label>Subcontractor</label><select id="b-subcon"></select>
+      <div id="b-items"></div>
+      <button class="ghost" onclick="addRow('b-items')">+ Add raw material</button>
+      <div id="b-ops"></div>
+      <button class="ghost" onclick="addOp()">+ Add operation</button>
+      <button class="ok" onclick="saveBom()">Save BOM</button>
+    </div>
+
+    <div id="wo" class="hide">
+      <label>Production Item</label><select id="w-item"></select>
+      <label>BOM</label><select id="w-bom"></select>
+      <label>Qty</label><input id="w-qty" type="number" value="1"/>
+      <label>Warehouse</label><select id="w-wh"></select>
+      <label>Planned start</label><input id="w-date" type="date"/>
+      <label class="row" style="margin:8px 0"><input type="checkbox" id="w-sub" style="width:auto;margin-right:8px"/>Subcontracted</label>
+      <label>Subcontractor</label><select id="w-subcon"></select>
+      <button class="ok" onclick="saveWO()">Create & Submit Work Order</button>
+    </div>
+
+    <div id="mfg" class="hide">
+      <label>Work Order</label><select id="m-wo"></select>
+      <label>Warehouse (consume + produce)</label><select id="m-wh"></select>
+      <div id="m-items"></div>
+      <button class="ghost" onclick="addRow('m-items')">+ Add finished good</button>
+      <button class="ok" onclick="produce()">Manufacture (Stock Entry)</button>
+    </div>
+
+    <div id="cost" class="hide">
+      <label>Item</label><select id="c-item"></select>
+      <label>Quantity</label><input id="c-qty" type="number" value="1"/>
+      <button class="ok" onclick="costRun()">Compute Cost</button>
+      <div id="c-out" style="margin-top:12px"></div>
+    </div>
+
+    <div id="plan" class="hide">
+      <button class="ok" onclick="mrpRun()">Run Material Requirement Planning</button>
+      <div id="mrp-out" style="margin-top:12px"></div>
+    </div>
+
+    <div id="setup" class="hide">
+      <h2>Workstations</h2>
+      <label>Name</label><input id="ws-name"/>
+      <label>Code</label><input id="ws-code"/>
+      <label>Hourly rate</label><input id="ws-rate" type="number"/>
+      <button class="ok" onclick="saveWs()">Add Workstation</button>
+      <table id="wsGrid" style="margin-top:12px"><thead><tr><th>Name</th><th>Code</th><th>Rate/hr</th></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Bills of Materials</h2>
+    <table id="bGrid"><thead><tr><th>BOM</th><th>Item</th><th>Qty</th><th>Sub?</th></tr></thead><tbody></tbody></table>
+    <h2 style="margin-top:14px">Work Orders</h2>
+    <table id="wGrid"><thead><tr><th>WO</th><th>Item</th><th>Qty</th><th>Sub?</th><th>Status</th></tr></thead><tbody></tbody></table>
+  </div>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+let ITEMS=[],WH=[],BOM=[],WO=[],PARTY=[],WS=[];
+function show(m,btn){document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');['bom','wo','mfg','cost','plan','setup'].forEach(id=>document.getElementById(id).classList.toggle('hide',id!==m));if(m==='setup')loadWs();if(m==='plan')mrpRun();}
+function itemOpts(){return ITEMS.map(i=>`<option value="${i.id}">${i.data.name}</option>`).join('');}
+function partyOpts(extra){return (extra||'')+PARTY.map(p=>`<option value="${p.id}">${p.data.name}</option>`).join('');}
+function addRow(id){document.getElementById(id).insertAdjacentHTML('beforeend',`<div class="row"><select class="it">${itemOpts()}</select><input class="q" type="number" placeholder="qty"/><input class="r" type="number" placeholder="rate(opt)"/></div>`);}
+function addOp(){document.getElementById('b-ops').insertAdjacentHTML('beforeend',`<div class="row"><input class="op" placeholder="operation"/><select class="ws">${WS.map(w=>`<option value="${w.id}">${w.data.name}</option>`).join('')}</select><input class="tm" type="number" placeholder="min"/></div>`);}
+function rows(id){return [...document.getElementById(id).querySelectorAll('.row')].map(r=>({item:r.querySelector('.it').value,qty:Number(r.querySelector('.q').value),rate:Number(r.querySelector('.r').value||0)})).filter(x=>x.item&&x.qty);}
+async function saveBom(){const items=rows('b-items');if(!items.length){alert('Add raw materials');return;}
+  const ops=[...document.getElementById('b-ops').querySelectorAll('.row')].map(r=>({operation:r.querySelector('.op').value,workstation:r.querySelector('.ws').value,time_in_minutes:Number(r.querySelector('.tm').value||0)})).filter(x=>x.operation&&x.workstation);
+  const r=await api('/bom',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:{item:bitem.value,quantity:Number(bqty.value||1),is_subcontracted:bsub.checked,subcontractor:bsubcon.value||undefined,items,operations:ops}})});if(r.error){alert(r.error);return;}alert('BOM '+r.data.name);loadGrids();}
+async function saveWO(){const r=await api('/work_order',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:{production_item:witem.value,bom:wbom.value,qty:Number(wqty.value||1),warehouse:wwh.value,planned_start_date:wdate.value,subcontracting:wsub.checked,subcontractor:wsubcon.value||undefined}})});if(r.error){alert(r.error);return;}await api('/work_order/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});alert('WO '+r.data.name);loadGrids();}
+async function produce(){const items=rows('m-items');if(!items.length){alert('Add finished good');return;}const r=await api('/stock_entry',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:{stock_type:'Manufacture',posting_date:new Date().toISOString().slice(0,10),from_warehouse:mwh.value,to_warehouse:mwh.value,work_order:mwo.value,items}})});if(r.error){alert(r.error);return;}await api('/stock_entry/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});alert('Manufactured '+r.data.name);}
+async function costRun(){const r=await api('/manufacturing/bom-cost?item='+citem.value+'&qty='+(Number(cqty.value)||1));if(r.error){alert(r.error);return;}
+  document.getElementById('c-out').innerHTML=`<div class="pill">Material ₹${r.material}</div><div class="pill">Operating ₹${r.operating}</div><div class="pill">Total ₹${r.total}</div><div class="pill">Per unit ₹${r.perUnit}</div>`;}
+async function mrpRun(){const r=await api('/manufacturing/mrp');if(r.error){alert(r.error);return;}
+  let h=`<h2>Demand</h2><table><thead><tr><th>Item</th><th>Qty</th></tr></thead><tbody>${r.demand.map(d=>`<tr><td>${d.itemName||d.item}</td><td>${d.qty}</td></tr>`).join('')}</tbody></table>`;
+  h+=`<h2 style="margin-top:12px">Net raw requirements</h2><table><thead><tr><th>Item</th><th>Qty</th></tr></thead><tbody>${r.netLeaves.map(l=>`<tr><td>${l.itemName||l.item}</td><td>${l.qty}</td></tr>`).join('')||'<tr><td colspan=2 class=muted>none</td></tr>'}</tbody></table>`;
+  h+=`<h2 style="margin-top:12px">Planned Work Orders</h2><table><thead><tr><th>Item</th><th>Qty</th><th>BOM</th></tr></thead><tbody>${r.plannedWorkOrders.map(w=>`<tr><td>${w.itemName||w.item}</td><td>${w.qty}</td><td>${w.bom}</td></tr>`).join('')||'<tr><td colspan=3 class=muted>none</td></tr>'}</tbody></table>`;
+  h+=`<h2 style="margin-top:12px">Planned Purchase Orders</h2>`+r.plannedPurchaseOrders.map((p,i)=>`<div class="pill">${p.supplier?('Supplier '+p.supplier):'No supplier'}</div>`+p.items.map(it=>`<div class=muted>${it.itemName||it.item}: ${it.qty} @ ₹${it.rate}</div>`).join('')).join('');
+  h+=`<div style="margin-top:10px"><button class="ok" onclick="mrpCreateWO()">Create Work Orders</button> <button class="ok" onclick="mrpCreatePO()">Create Purchase Order(s)</button></div>`;
+  window.__mrp=r;document.getElementById('mrp-out').innerHTML=h;}
+async function mrpCreateWO(){if(!window.__mrp)return;const r=await api('/manufacturing/mrp/work-orders',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({module:'manufacturing',items:window.__mrp.plannedWorkOrders})});if(r.error){alert(r.error);return;}alert('Created '+(r.created||[]).length+' Work Orders');loadGrids();mrpRun();}
+async function mrpCreatePO(){if(!window.__mrp)return;let n=0;for(const p of window.__mrp.plannedPurchaseOrders){const r=await api('/manufacturing/mrp/purchase-order',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({module:'buying',supplier:p.supplier||'',items:p.items})});if(!r.error)n++;}alert('Created '+n+' Purchase Order(s)');mrpRun();}
+async function saveWs(){const r=await api('/workstation',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:{name:wsname.value,code:wscode.value,hourly_rate:Number(wsrate.value||0)}})});if(r.error){alert(r.error);return;}alert('Workstation '+r.data.name);loadWs();}
+async function loadWs(){WS=await api('/workstation');const g=document.querySelector('#wsGrid tbody');g.innerHTML='';for(const w of WS.reverse())g.insertAdjacentHTML('beforeend',`<tr><td>${w.data.name}</td><td>${w.data.code||''}</td><td>${w.data.hourly_rate}</td></tr>`);}
+async function init(){const [it,wh,bo,wo,pa,ws]=await Promise.all([api('/item'),api('/warehouse'),api('/bom'),api('/work_order'),api('/party'),api('/workstation')]);ITEMS=it;WH=wh;BOM=bo;WO=wo;PARTY=pa;WS=ws;
+  bitem.innerHTML=itemOpts();witem.innerHTML=itemOpts();citem.innerHTML=itemOpts();wbom.innerHTML=BOM.map(b=>`<option value="${b.id}">${b.data.name} (${b.data.item})</option>`).join('');wwh.innerHTML=WH.map(w=>`<option value="${w.id}">${w.data.name}</option>`).join('');mwo.innerHTML=WO.map(w=>`<option value="${w.id}">${w.data.name}</option>`).join('');mwh.innerHTML=WH.map(w=>`<option value="${w.id}">${w.data.name}</option>`).join('');bsubcon.innerHTML=partyOpts('<option value="">—</option>');wsubcon.innerHTML=partyOpts('<option value="">—</option>');
+  addRow('b-items');addRow('m-items');await loadGrids();await loadWs();}
+async function loadGrids(){const b=await api('/bom');const g=document.querySelector('#bGrid tbody');g.innerHTML='';for(const r of b.reverse())g.insertAdjacentHTML('beforeend',`<tr><td>${r.data.name}</td><td>${(ITEMS.find(i=>i.id===r.data.item)?.data?.name)||''}</td><td>${r.data.quantity}</td><td>${r.data.is_subcontracted?'✓':''}</td></tr>`);const w=await api('/work_order');const g2=document.querySelector('#wGrid tbody');g2.innerHTML='';for(const r of w.reverse())g2.insertAdjacentHTML('beforeend',`<tr><td>${r.data.name}</td><td>${(ITEMS.find(i=>i.id===r.data.production_item)?.data?.name)||''}</td><td>${r.data.qty}</td><td>${r.data.subcontracting?'✓':''}</td><td>${r.status}</td></tr>`);}
+init();
+</script>
+</body>
+</html>

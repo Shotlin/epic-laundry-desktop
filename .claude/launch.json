@@ -1,0 +1,16 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "epic-bos",
+      "cwd": "server",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["tsx", "src/index.ts"],
+      "port": 3011,
+      "env": {
+        "PORT": "3011",
+        "EPIC_DATA_FILE": "./data/_uitest.json"
+      }
+    }
+  ]
+}

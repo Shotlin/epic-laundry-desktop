@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS — Migration (Tally / Zoho)</title>
+<style>
+  :root{--bg:#0b0d13;--card:#141826;--ink:#eef1f7;--muted:#8b93a7;--brand:#6d8bff;--brand2:#a06bff;--ok:#3ecf8e;--warn:#ffb454;--line:#222838}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(1200px 600px at 70% -10%,#1a2036 0%,var(--bg) 55%);color:var(--ink);min-height:100vh}
+  header{padding:14px 22px;display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--line)}
+  header a{color:var(--muted);text-decoration:none}
+  main{padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:18px;max-width:1200px;margin:0 auto}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,0)) ,var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+  h2{margin:0 0 12px;font-size:15px}
+  label{display:block;color:var(--muted);font-size:12px;margin:8px 0 3px}
+  input,select,textarea{width:100%;background:#0c0f18;border:1px solid #2a3145;color:var(--ink);border-radius:10px;padding:9px;font-size:14px}
+  button{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border:0;border-radius:10px;padding:10px 16px;cursor:pointer;font-weight:600;margin-top:10px}
+  button.ok{background:linear-gradient(135deg,var(--ok),#2bbf7e)}button.ghost{background:#222a3c;color:var(--ink)}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--muted);font-weight:500}
+  .maprow{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px}
+  #log{background:#0c0f18;border:1px solid var(--line);border-radius:10px;padding:12px;font-size:12px;max-height:200px;overflow:auto;margin-top:10px;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<header><a href="/ui/">← Epic BOS</a><b>📥 Migration</b> <span style="color:var(--muted)">Tally / Zoho → Epic BOS</span></header>
+<main>
+  <div class="card">
+    <h2>1 · Pick a source preset</h2>
+    <select id="preset" onchange="applyPreset()"></select>
+    <label style="margin-top:10px">Target entity</label>
+    <input id="entity" value="account"/>
+    <h2 style="margin-top:14px">2 · Paste CSV</h2>
+    <textarea id="csv" rows="9" placeholder="header1,header2&#10;val1,val2"></textarea>
+    <button class="ghost" onclick="parseCsv()">Parse &amp; map columns</button>
+    <div id="map"></div>
+    <button class="ok" onclick="doImport()">Import</button>
+    <div id="log"></div>
+  </div>
+  <div class="card">
+    <h2>How it works</h2>
+    <p class="muted" style="font-size:13px;line-height:1.6">
+      Paste a CSV exported from <b>Tally</b> or <b>Zoho</b> (or any spreadsheet). Choose a preset to
+      auto-map columns, or map manually. Masters (accounts, parties, items) are created; documents
+      (invoices, vouchers) are created <b>and submitted</b>. Ledger <b>opening balances</b> are carried
+      into the books via an Opening Balance equity leg, so your Trial Balance reflects history on day one.
+    </p>
+    <h2 style="margin-top:14px">Presets</h2>
+    <table id="presets"><thead><tr><th>Preset</th><th>Entity</th></tr></thead><tbody></tbody></table>
+    <h2 style="margin-top:14px">Recent imports</h2>
+    <table id="recent"><thead><tr><th>Entity</th><th>Rows</th><th>OK</th></tr></thead><tbody></tbody></table>
+  </div>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+let PRESETS=[],HEADERS=[],MAP={};
+function parseCSVText(t){
+  const lines=t.replace(/\r/g,'').split('\n').filter(l=>l.trim()!=='');
+  if(!lines.length)return [];
+  const split=(l)=>{const out=[];let cur='';let q=false;for(const c of l){if(c==='"'){q=!q;continue;}if(c===','&&!q){out.push(cur);cur='';}else cur+=c;}out.push(cur);return out;};
+  const h=split(lines[0]).map(s=>s.trim());
+  return lines.slice(1).map(l=>{const f=split(l);const o={};h.forEach((k,i)=>o[k]=f[i]?.trim()||'');return o;});
+}
+async function init(){
+  PRESETS=await api('/migration/presets');
+  preset.innerHTML='<option value="">— custom —</option>'+PRESETS.map(p=>`<option value="${p.key}">${p.label}</option>`).join('');
+  const tb=document.querySelector('#presets tbody');tb.innerHTML='';
+  for(const p of PRESETS){const tr=document.createElement('tr');tr.innerHTML=`<td>${p.label}</td><td>${p.entity}</td>`;tb.appendChild(tr);}
+}
+function applyPreset(){
+  const p=PRESETS.find(x=>x.key===preset.value);
+  if(!p)return;
+  entity.value=p.entity;
+  if(p.fieldMap&&Object.keys(p.fieldMap).length){renderMap(p.fieldMap);}
+}
+function parseCsv(){
+  const rows=parseCSVText(csv.value);
+  if(!rows.length){log('No rows found.');return;}
+  HEADERS=Object.keys(rows[0]);
+  renderMap(MAP, true);
+  window.__rows=rows;
+  log('Parsed '+rows.length+' rows. Headers: '+HEADERS.join(', '));
+}
+function renderMap(existing={}, fromParse=false){
+  const fields=Object.keys(existing).length?Object.keys(existing):['name','account_type','opening_balance','opening_side','phone','email','gstin','item_code','uom','rate','hsn','gst_rate'];
+  MAP={};
+  map.innerHTML='<label>Column mapping (our field → source column)</label>'+(fromParse?'':'');
+  for(const f of fields){
+    const sel=`<select id="m_${f}"><option value="">— ignore —</option>${HEADERS.map(h=>`<option ${existing[f]===h?'selected':''}>${h}</option>`).join('')}</select>`;
+    map.insertAdjacentHTML('beforeend',`<div class="maprow"><div style="color:var(--muted);font-size:12px;padding-top:9px">${f}</div>${sel}</div>`);
+  }
+}
+function collectMap(){
+  const m={};document.querySelectorAll('[id^="m_"]').forEach(s=>{const f=s.id.slice(2);if(s.value)m[f]=s.value;});
+  return m;
+}
+async function doImport(){
+  if(!window.__rows||!window.__rows.length){alert('Parse a CSV first');return;}
+  const fieldMap=collectMap();
+  const r=await api('/migration/import',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({entity:entity.value,rows:window.__rows,fieldMap})});
+  if(r.error){alert(r.error);return;}
+  log('Imported '+r.imported+'/'+r.accepted+'\n'+JSON.stringify(r.results.slice(0,5),null,1));
+  const tb=document.querySelector('#recent tbody');const tr=document.createElement('tr');
+  tr.innerHTML=`<td>${entity.value}</td><td>${r.accepted}</td><td>${r.imported}</td>`;tb.insertBefore(tr,tb.firstChild);
+}
+function log(s){log_box.textContent=s;}
+init();
+</script>
+</body>
+</html>

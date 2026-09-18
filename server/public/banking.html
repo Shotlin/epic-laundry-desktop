@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS — Banking & Payments</title>
+<style>
+  :root{--bg:#0f1117;--card:#1a1d27;--ink:#e7e9ee;--muted:#9aa1b2;--brand:#5b8cff;--ok:#3ecf8e;--warn:#ffb454}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{padding:16px 24px;display:flex;gap:12px;align-items:center;border-bottom:1px solid #232735}
+  header a{color:var(--muted);text-decoration:none}
+  main{padding:24px;display:grid;grid-template-columns:1fr 1.2fr;gap:20px}
+  .card{background:var(--card);border:1px solid #232735;border-radius:12px;padding:16px}
+  h2{margin:0 0 12px;font-size:15px}
+  label{display:block;color:var(--muted);font-size:12px;margin:8px 0 3px}
+  input,select,textarea{width:100%;background:#0f1117;border:1px solid #2a2f3d;color:var(--ink);border-radius:8px;padding:8px}
+  button{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:9px 14px;cursor:pointer;margin-top:10px}
+  button.ok{background:var(--ok)}button.ghost{background:#2a2f3d}button.warn{background:var(--warn);color:#111}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid #232735;font-size:13px}
+  .tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .tabs button{background:#232735;color:var(--muted);border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
+  .tabs button.on{background:var(--brand);color:#fff}
+  .hide{display:none}.row{display:flex;gap:8px}.muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<header><a href="/ui/">← Epic BOS</a><b>🏦 Banking & Payments</b></header>
+<main>
+  <div class="card">
+    <div class="tabs">
+      <button class="on" onclick="show('recv',this)">Receive Payment</button>
+      <button onclick="show('pay',this)">Make Payment</button>
+      <button onclick="show('recon',this)">Bank Reconcile</button>
+      <button onclick="show('out',this)">Outstanding</button>
+    </div>
+
+    <div id="recv">
+      <label>Customer / Party</label><select id="recv-party"></select>
+      <label>Against Invoice (optional)</label><select id="recv-inv" onchange="autofill('recv')"></select>
+      <label>Date</label><input id="recv-date" type="date"/>
+      <label>Mode</label><select id="recv-mode"><option>Cash</option><option selected>Bank</option><option>UPI</option><option>Card</option></select>
+      <label>Amount (₹)</label><input id="recv-amt" type="number"/>
+      <label>Remarks</label><textarea id="recv-rm" rows="2"></textarea>
+      <button class="ok" onclick="savePay('Receive')">Receive &amp; Post</button>
+    </div>
+
+    <div id="pay" class="hide">
+      <label>Supplier / Party</label><select id="pay-party"></select>
+      <label>Against Bill (optional)</label><select id="pay-inv" onchange="autofill('pay')"></select>
+      <label>Date</label><input id="pay-date" type="date"/>
+      <label>Mode</label><select id="pay-mode"><option>Cash</option><option selected>Bank</option><option>UPI</option><option>Card</option></select>
+      <label>Amount (₹)</label><input id="pay-amt" type="number"/>
+      <label>Remarks</label><textarea id="pay-rm" rows="2"></textarea>
+      <button class="ok" onclick="savePay('Pay')">Pay &amp; Post</button>
+    </div>
+
+    <div id="recon" class="hide">
+      <label>Bank / Account</label><input id="bnk-name" placeholder="SBI Current XXXX1234"/>
+      <label>Paste statement lines (JSON array)</label>
+      <textarea id="bnk-lines" rows="6">[
+  {"date":"2026-07-25","narration":"CUSTOMER-NEFT","withdrawal":0,"deposit":5000,"balance":5885},
+  {"date":"2026-07-26","narration":"VENDOR-RTGS","withdrawal":1200,"deposit":0,"balance":4685}
+]</textarea>
+      <button onclick="importBank()">Import Statement</button>
+    </div>
+
+    <div id="out" class="hide">
+      <p class="muted">Unpaid Receivables &amp; Payables (after payments).</p>
+      <button class="ghost" onclick="loadOut()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Recent Payments</h2>
+    <table id="grid"><thead><tr><th>Type</th><th>No</th><th>Amount</th><th>Mode</th><th>Status</th></tr></thead><tbody></tbody></table>
+    <h2 style="margin-top:18px">Statements &amp; Reconciliation</h2>
+    <table id="stmts"><thead><tr><th>Stmt</th><th>Lines</th><th>Reconciled</th><th></th></tr></thead><tbody></tbody></table>
+    <div id="reconDetail"></div>
+  </div>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+const today=()=>new Date().toISOString().slice(0,10);
+let PARTIES=[],REC=[],PAY=[];
+function show(m,btn){document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');['recv','pay','recon','out'].forEach(id=>document.getElementById(id).classList.toggle('hide',id!==m));if(m==='out')loadOut();if(m==='recon')loadStmts();}
+async function load(){
+  PARTIES=await api('/party');
+  recvparty.innerHTML=PARTIES.map(p=>`<option value="${p.id}">${p.data.name}</option>`).join('');
+  payparty.innerHTML=PARTIES.map(p=>`<option value="${p.id}">${p.data.name}</option>`).join('');
+  const o=await api('/banking/outstanding');
+  REC=o.receivables; PAY=o.payables;
+  recvinv.innerHTML='<option value="">— none —</option>'+REC.map(r=>`<option value="${r.id}" data-party="${r.party}">${r.name} (bal ₹${r.balance})</option>`).join('');
+  payinv.innerHTML='<option value="">— none —</option>'+PAY.map(r=>`<option value="${r.id}" data-party="${r.party}">${r.name} (bal ₹${r.balance})</option>`).join('');
+  recvdate.value=today();paydate.value=today();
+  await loadPayments();
+}
+function autofill(which){
+  const sel=which==='recv'?recvinv:payinv;
+  const opt=sel.options[sel.selectedIndex];
+  const psel=which==='recv'?recvparty:payparty;
+  if(opt.dataset.party)psel.value=opt.dataset.party;
+}
+async function savePay(type){
+  const isRec=type==='Receive';
+  const party=isRec?recvparty.value:payparty.value;
+  const inv=isRec?recvinv.value:payinv.value;
+  const amt=Number(isRec?recvamt.value:payamt.value);
+  if(!amt||amt<=0){alert('Enter an amount');return;}
+  const body={payment_type:type,party,posting_date:isRec?recvdate.value:paydate.value,mode:isRec?recv-mode.value:pay-mode.value,amount:amt,remarks:isRec?recvrm.value:payrm.value};
+  if(isRec)body.against_sales=inv||undefined;else body.against_purchase=inv||undefined;
+  const r=await api('/payment_entry',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});
+  if(r.error){alert(r.error);return;}
+  await api('/payment_entry/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});
+  alert('Posted '+r.name);load();
+}
+async function loadPayments(){
+  const rows=await api('/payment_entry');const tb=document.querySelector('#grid tbody');tb.innerHTML='';
+  for(const r of rows.reverse()){const tr=document.createElement('tr');tr.innerHTML=`<td>${r.data.payment_type}</td><td>${r.name}</td><td>₹${r.data.amount}</td><td>${r.data.mode}</td><td>${r.status}</td>`;tb.appendChild(tr);}
+}
+async function importBank(){
+  let lines;try{lines=JSON.parse(bnklines.value);}catch(e){alert('Invalid JSON');return;}
+  const r=await api('/bank/import',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({bank_name:bnkname.value,lines})});
+  if(r.error){alert(r.error);return;}alert('Imported '+r.name);await loadStmts();
+}
+async function loadStmts(){
+  const stmts=await api('/bank_statement');const tb=document.querySelector('#stmts tbody');tb.innerHTML='';
+  for(const s of stmts.reverse()){
+    const lines=s.data.lines||[];const rec=lines.filter(l=>l.reconciled).length;
+    const tr=document.createElement('tr');tr.innerHTML=`<td>${s.name}</td><td>${lines.length}</td><td>${rec}/${lines.length}</td><td><button class="ghost" onclick="openStmt('${s.id}')">view</button></td>`;tb.appendChild(tr);
+  }
+}
+async function openStmt(id){
+  const s=await api('/bank_statement/'+id);const lines=s.data.lines||[];
+  reconDetail.innerHTML=`<h3>${s.name}</h3><table><thead><tr><th>Date</th><th>Narration</th><th>Dr</th><th>Cr</th><th>Bal</th><th></th></tr></thead><tbody>${lines.map((l,i)=>`<tr><td>${l.date}</td><td>${l.narration}</td><td>${l.withdrawal||''}</td><td>${l.deposit||''}</td><td>${l.balance||''}</td><td>${l.reconciled?'✅':`<button class="warn" onclick="reconcile('${id}',${i})">reconcile</button>`}</td></tr>`).join('')}</tbody></table>`;
+}
+async function reconcile(id,i){
+  const r=await api('/bank/'+id+'/reconcile',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({index:i})});
+  if(r.error){alert(r.error);return;}alert('Reconciled '+r.type+' ₹'+r.amount);await loadStmts();await load();
+}
+async function loadOut(){
+  const o=await api('/banking/outstanding');
+  reconDetail.innerHTML=`<h3>Receivables (${o.receivables.length})</h3><table><thead><tr><th>Invoice</th><th>Party</th><th>Total</th><th>Paid</th><th>Balance</th></tr></thead><tbody>${o.receivables.map(r=>`<tr><td>${r.name}</td><td>${r.party}</td><td>₹${r.grand_total}</td><td>₹${r.paid}</td><td>₹${r.balance}</td></tr>`).join('')}</tbody></table>`+
+    `<h3 style="margin-top:16px">Payables (${o.payables.length})</h3><table><thead><tr><th>Bill</th><th>Party</th><th>Total</th><th>Paid</th><th>Balance</th></tr></thead><tbody>${o.payables.map(r=>`<tr><td>${r.name}</td><td>${r.party}</td><td>₹${r.grand_total}</td><td>₹${r.paid}</td><td>₹${r.balance}</td></tr>`).join('')}</tbody></table>`;
+}
+load();
+</script>
+</body>
+</html>

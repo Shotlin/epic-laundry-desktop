@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS — POS (Offline-ready)</title>
+<style>
+  :root{--bg:#0b0d13;--card:#141826;--ink:#eef1f7;--muted:#8b93a7;--brand:#6d8bff;--brand2:#a06bff;--ok:#3ecf8e;--warn:#ffb454;--bad:#ff6b6b;--line:#222838}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(1200px 600px at 70% -10%,#1a2036 0%,var(--bg) 55%);color:var(--ink);min-height:100vh}
+  header{padding:14px 22px;display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--line);position:sticky;top:0;background:rgba(11,13,19,.85);backdrop-filter:blur(8px);z-index:5}
+  header a{color:var(--muted);text-decoration:none}
+  .pill{font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);display:flex;gap:6px;align-items:center}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  .dot.off{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+  .spacer{flex:1}
+  main{padding:20px;display:grid;grid-template-columns:1.5fr 1fr;gap:18px;max-width:1200px;margin:0 auto}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,0)) ,var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+  h2{margin:0 0 12px;font-size:15px;letter-spacing:.3px}
+  input,select{background:#0c0f18;border:1px solid #2a3145;color:var(--ink);border-radius:10px;padding:9px;font-size:14px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+  .it{background:#0c0f18;border:1px solid #232b3d;border-radius:12px;padding:14px;cursor:pointer;text-align:center;transition:.15s;position:relative;overflow:hidden}
+  .it:hover{border-color:var(--brand);transform:translateY(-2px)}
+  .it b{display:block;font-size:13px}.it span{color:var(--muted);font-size:11px}
+  .it .price{color:var(--brand);font-weight:700;margin-top:4px;display:block}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:9px 6px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--muted);font-weight:500}
+  button{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border:0;border-radius:10px;padding:10px 16px;cursor:pointer;font-weight:600;margin-top:10px}
+  button.ghost{background:#222a3c;color:var(--ink)}button.ok{background:linear-gradient(135deg,var(--ok),#2bbf7e)}button.warn{background:linear-gradient(135deg,var(--warn),#ff9d3c);color:#1a1206}
+  .tot{font-size:22px;font-weight:800;text-align:right;margin:10px 0}
+  #receipt{white-space:pre-wrap;font-family:ui-monospace,Menlo,monospace;font-size:12px;background:#0c0f18;padding:12px;border-radius:10px;max-height:220px;overflow:auto;border:1px solid var(--line)}
+  .qbadge{background:var(--warn);color:#1a1206;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700}
+  .switch{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
+  .toggle{width:40px;height:22px;border-radius:999px;background:#2a3145;position:relative;cursor:pointer;transition:.2s}
+  .toggle.on{background:var(--warn)}
+  .toggle::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.2s}
+  .toggle.on::after{left:20px}
+</style>
+</head>
+<body>
+<header>
+  <a href="/ui/">← Epic BOS</a><b>🧾 POS</b>
+  <span class="pill" id="netpill"><span class="dot" id="netdot"></span><span id="nettxt">Online</span></span>
+  <span class="pill" id="pendpill">Queued: <b class="qbadge" id="pend">0</b></span>
+  <div class="spacer"></div>
+  <span class="switch">Offline mode<div class="toggle" id="offToggle" onclick="toggleOffline()"></div></span>
+  <button class="ghost" onclick="flush()" id="syncBtn">Sync ▲</button>
+</header>
+<main>
+  <div class="card">
+    <h2>Tap items to add to cart</h2>
+    <div class="grid" id="catalog"></div>
+  </div>
+  <div class="card">
+    <h2>Counter</h2>
+    <label style="color:var(--muted);font-size:12px">Warehouse / counter</label>
+    <select id="wh" style="width:100%;margin-top:4px"></select>
+    <label style="color:var(--muted);font-size:12px;margin-top:8px;display:block">Customer (optional)</label>
+    <select id="cust" style="width:100%;margin-top:4px"></select>
+    <label style="color:var(--muted);font-size:12px;margin-top:8px;display:block">Payment mode</label>
+    <select id="pay" style="width:100%;margin-top:4px"><option>Cash</option><option>UPI</option><option>Card</option></select>
+    <table id="cart"><thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th></th></tr></thead><tbody></tbody></table>
+    <div class="tot" id="tot">₹0.00</div>
+    <button class="ok" style="width:100%" onclick="charge()">Charge &amp; Print</button>
+    <button class="ghost" onclick="getIrn()" id="irnBtn" style="display:none;width:100%">Get IRN (e-invoice)</button>
+    <div id="receipt" style="margin-top:10px"></div>
+  </div>
+</main>
+<script>
+const KEY='';
+const QKEY='epic_pos_queue_v1';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json()).catch(()=>null);
+let ITEMS=[],WH=[],CUST=[],CART={},lastId=null,forcedOffline=false,QUEUE=[];
+try{QUEUE=JSON.parse(localStorage.getItem(QKEY)||'[]');}catch(e){QUEUE=[]}
+
+function online(){return navigator.onLine && !forcedOffline;}
+function refreshNet(){
+  const on=online();
+  netdot.className='dot'+(on?'':' off');nettxt.textContent=on?'Online':'Offline';
+  pend.textContent=QUEUE.length;pendpill.style.display=QUEUE.length?'flex':'none';
+  if(on && QUEUE.length) flush(); // auto-replay when back online
+}
+function toggleOffline(){forcedOffline=!forcedOffline;offToggle.className='toggle'+(forcedOffline?' on':'');refreshNet();}
+async function init(){
+  ITEMS=await api('/item');WH=await api('/warehouse');CUST=await api('/party');
+  if(!ITEMS||!WH) {receipt.textContent='⚠ Server unreachable — POS is in OFFLINE mode. Sales will be queued and synced automatically.';forcedOffline=true;offToggle.className='toggle on';}
+  wh.innerHTML=WH.map(w=>`<option value="${w.id}">${w.data.name}</option>`).join('');
+  cust.innerHTML='<option value="">Walk-in</option>'+(CUST||[]).map(c=>`<option value="${c.id}">${c.data.name}</option>`).join('');
+  catalog.innerHTML=(ITEMS||[]).map(i=>`<div class="it" onclick="add('${i.id}')"><b>${i.data.name}</b><span>${i.data.uom}</span><span class="price">₹${i.data.rate}</span></div>`).join('');
+  refreshNet();
+}
+function add(id){CART[id]=(CART[id]||0)+1;render();}
+function render(){
+  const tb=document.querySelector('#cart tbody');tb.innerHTML='';let total=0;
+  for(const id in CART){const it=ITEMS.find(i=>i.id===id);const q=CART[id];const line=it.data.rate*q;total+=line;
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${it.data.name}</td><td><input type="number" value="${q}" min="1" style="width:60px" onchange="setQ('${id}',this.value)"></td><td>₹${it.data.rate}</td><td><button class="ghost" onclick="del('${id}')">x</button></td>`;
+    tb.appendChild(tr);}
+  tot.textContent='₹'+total.toFixed(2);
+}
+function setQ(id,v){CART[id]=Math.max(1,Number(v));render();}
+function del(id){delete CART[id];render();}
+function buildPayload(){
+  const items=Object.entries(CART).map(([id,q])=>{const it=ITEMS.find(i=>i.id===id);return{item:id,qty:q,rate:it.data.rate,gst_rate:it.data.gst_rate};});
+  return {entity:'pos_invoice',data:{counter:'C1',customer:cust.value||undefined,payment_mode:pay.value,warehouse:wh.value,posting_date:new Date().toISOString().slice(0,10),items}};
+}
+async function charge(){
+  if(!Object.keys(CART).length){alert('Cart empty');return;}
+  const payload=buildPayload();
+  if(online()){
+    const r=await api('/pos_invoice',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:payload.data})});
+    if(!r||r.error){queueSale(payload);return;}
+    await api('/pos_invoice/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});
+    lastId=r.id;irnBtn.style.display='inline-block';
+    const inv=await api('/pos_invoice/'+r.id);
+    receipt.textContent='RECEIPT '+r.name+'\nMode: '+pay.value+'\nTotal: ₹'+(inv?.data?.grand_total||payload.data.items.reduce((a,b)=>a+b.rate*b.qty,0).toFixed(2))+'\nIRN: '+(inv?.data?.einvoice_status||'NOT_GENERATED');
+  } else { queueSale(payload); }
+  CART={};render();
+}
+function queueSale(payload){
+  QUEUE.push(payload);localStorage.setItem(QKEY,JSON.stringify(QUEUE));
+  receipt.textContent='⏳ OFFLINE — queued locally ('+QUEUE.length+' pending).\nWill sync automatically when connection returns.\n\n'+JSON.stringify(payload.data.items.map(i=>({name:ITEMS.find(x=>x.id===i.item)?.data?.name,q:i.qty})),null,1);
+  refreshNet();
+}
+async function flush(){
+  if(!QUEUE.length||!online())return;
+  const docs=QUEUE.slice();
+  const res=await api('/sync/push',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({docs})});
+  if(!res){return;}
+  const applied=res.results.filter(r=>r.ok);
+  QUEUE=QUEUE.filter((_,i)=>!res.results[i]||!res.results[i].ok);
+  localStorage.setItem(QKEY,JSON.stringify(QUEUE));
+  receipt.textContent='✅ Synced '+applied.length+'/'+(docs.length)+' queued sale(s).'+(QUEUE.length?('\n'+QUEUE.length+' still pending.'):'');
+  refreshNet();
+}
+async function getIrn(){if(!lastId)return;const r=await api('/gst/irn/'+lastId,{method:'POST',headers:{'x-api-key':KEY}});receipt.textContent+='\nIRN: '+(r.irn||JSON.stringify(r));}
+window.addEventListener('online',refreshNet);window.addEventListener('offline',refreshNet);
+init();render();
+</script>
+</body>
+</html>

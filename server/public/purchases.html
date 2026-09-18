@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS — Purchases</title>
+<style>
+  :root{--bg:#0f1117;--card:#1a1d27;--ink:#e7e9ee;--muted:#9aa1b2;--brand:#5b8cff;--ok:#3ecf8e}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{padding:16px 24px;display:flex;gap:12px;align-items:center;border-bottom:1px solid #232735}
+  header a{color:var(--muted);text-decoration:none}
+  main{padding:24px;display:grid;grid-template-columns:1fr 1.2fr;gap:20px}
+  .card{background:var(--card);border:1px solid #232735;border-radius:12px;padding:16px}
+  h2{margin:0 0 12px;font-size:15px}
+  label{display:block;color:var(--muted);font-size:12px;margin:8px 0 3px}
+  input,select{width:100%;background:#0f1117;border:1px solid #2a2f3d;color:var(--ink);border-radius:8px;padding:8px}
+  button{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:9px 14px;cursor:pointer;margin-top:10px}
+  button.ok{background:var(--ok)}button.ghost{background:#2a2f3d}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid #232735;font-size:13px}
+  .pill{background:#232735;border-radius:20px;padding:2px 8px;font-size:11px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header><a href="/ui/">← Epic BOS</a><b>🛒 Purchases</b></header>
+<main>
+  <div class="card">
+    <h2>New Purchase Invoice (Bill)</h2>
+    <label>Supplier (registered)</label><select id="sup"></select>
+    <label>Bill no</label><input id="bill"/>
+    <label>Posting date</label><input id="date" type="date"/>
+    <label>Place of Supply (our state)</label><input id="pos" value="29"/>
+    <label>Warehouse (GRN into)</label><select id="wh"></select>
+    <div id="items"></div>
+    <button class="ghost" onclick="addRow()">+ Add item</button>
+    <button onclick="save()">Submit Purchase</button>
+  </div>
+  <div class="card">
+    <h2>Purchase Invoices</h2>
+    <table id="grid"><thead><tr><th>No</th><th>Supplier</th><th>Total</th><th>Status</th></tr></thead><tbody></tbody></table>
+  </div>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+let ITEMS=[],WH=[],SUP=[];
+function rowHtml(){return `<div style="display:flex;gap:8px;margin-top:8px"><select class="it"></select><input class="q" type="number" placeholder="qty"/><input class="r" type="number" placeholder="rate"/></div>`;}
+function addRow(){document.getElementById('items').insertAdjacentHTML('beforeend',rowHtml());fillItems();}
+function fillItems(){document.querySelectorAll('.it').forEach(s=>{const v=s.value;s.innerHTML=ITEMS.map(i=>`<option value="${i.id}">${i.data.name} (₹${i.data.rate}/${i.data.uom})</option>`).join('');s.value=v;});}
+async function load(){
+  ITEMS=await api('/item');WH=await api('/warehouse');SUP=await api('/party');
+  sup.innerHTML=SUP.map(c=>`<option value="${c.id}">${c.data.name}${c.data.gstin?' · '+c.data.gstin:''}</option>`).join('');
+  wh.innerHTML=WH.map(w=>`<option value="${w.id}">${w.data.name}</option>`).join('');
+  if(!document.querySelector('.it'))addRow();
+  const inv=await api('/purchase_invoice');
+  const tb=document.querySelector('#grid tbody');tb.innerHTML='';
+  for(const r of inv.filter(r=>r.status==='Submitted').reverse()){
+    const s=SUP.find(c=>c.id===r.supplier);
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${r.name}</td><td>${s?.data?.name||''}</td><td>₹${r.grand_total}</td><td><span class="pill">${r.status}</span></td>`;
+    tb.appendChild(tr);
+  }
+}
+async function save(){
+  const rows=[...document.querySelectorAll('#items div')].filter(d=>d.querySelector('.it'));
+  const its=rows.map(r=>({item:r.querySelector('.it').value,qty:Number(r.querySelector('.q').value),rate:Number(r.querySelector('.r').value||0),gst_rate:ITEMS.find(i=>i.id===r.querySelector('.it').value)?.data?.gst_rate}));
+  if(!its.length||its.some(i=>!i.item||!i.qty)){alert('Add at least one item with qty');return;}
+  const body={supplier:sup.value,bill_no:bill.value,posting_date:date.value,place_of_supply:pos.value,warehouse:wh.value,items:its};
+  const r=await api('/purchase_invoice',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});
+  if(r.error){alert(r.error);return;}
+  await api('/purchase_invoice/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});
+  load();
+}
+date.value=new Date().toISOString().slice(0,10);
+load();
+</script>
+</body>
+</html>

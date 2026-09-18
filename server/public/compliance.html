@@ -1,0 +1,77 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS - Quality & Compliance</title>
+<style>
+  :root{--bg:#0b0d13;--card:#141826;--ink:#eef1f7;--muted:#8b93a7;--brand:#6d8bff;--brand2:#a06bff;--ok:#3ecf8e;--warn:#ffb454;--line:#222838}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(1200px 600px at 70% -10%,#1a2036 0%,var(--bg) 55%);color:var(--ink);min-height:100vh}
+  header{padding:14px 22px;display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--line)}
+  header a{color:var(--muted);text-decoration:none}
+  main{padding:20px;display:grid;grid-template-columns:1fr 1.2fr;gap:18px;max-width:1200px;margin:0 auto}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,0)) ,var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+  h2{margin:0 0 12px;font-size:15px}
+  label{display:block;color:var(--muted);font-size:12px;margin:8px 0 3px}
+  input,select,textarea{width:100%;background:#0c0f18;border:1px solid #2a3145;color:var(--ink);border-radius:10px;padding:9px;font-size:14px}
+  button{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border:0;border-radius:10px;padding:9px 14px;cursor:pointer;font-weight:600;margin-top:8px}
+  button.ok{background:linear-gradient(135deg,var(--ok),#2bbf7e)}button.ghost{background:#222a3c;color:var(--ink)}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--muted);font-weight:500}
+  .tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .tabs button{background:#222a3c;color:var(--muted);border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
+  .tabs button.on{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff}
+  .hide{display:none}
+  .kpi{display:flex;flex-wrap:wrap;gap:12px}
+  .kpi div{background:#0c0f18;border:1px solid #2a3145;border-radius:12px;padding:12px 14px;min-width:140px}
+  .kpi b{display:block;font-size:18px;color:var(--ok)}
+  .kpi span{color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<header><a href="/ui/">- Epic BOS</a><b>Quality & Compliance</b></header>
+<main>
+  <div class="card">
+    <div class="tabs">
+      <button class="on" onclick="show('sum',this)">Summary</button>
+      <button onclick="show('tcs',this)">TCS</button>
+      <button onclick="show('aud',this)">Audit</button>
+    </div>
+    <div id="sum"><div id="kpis" class="kpi"></div></div>
+    <div id="tcs" class="hide">
+      <label>Party</label><select id="t-party"></select>
+      <label>Date</label><input id="t-date" type="date"/>
+      <label>TCS amount</label><input id="t-amt" type="number"/>
+      <button class="ok" onclick="saveTcs()">Record TCS</button>
+    </div>
+    <div id="aud" class="hide"><div id="audit-out" style="color:var(--ok)"></div></div>
+  </div>
+  <div class="card">
+    <h2>Statutory Payables</h2>
+    <table id="payTab"><thead><tr><th>Liability</th><th>Amount</th></tr></thead><tbody></tbody></table>
+  </div>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+function show(m,btn){document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');['sum','tcs','aud'].forEach(id=>document.getElementById(id).classList.toggle('hide',id!==m));}
+async function saveTcs(){const r=await api('/tcs_entry',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:{party:tparty.value,posting_date:tdate.value,amount:Number(tamt.value||0)}})});if(r.error){alert(r.error);return;}await api('/tcs_entry/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});alert('TCS '+r.data.name);load();}
+async function init(){const P=await api('/party');tparty.innerHTML=P.filter(p=>p.data.is_customer).map(p=>`<option value="${p.id}">${p.data.name}</option>`).join('');await load();}
+async function load(){
+  const s=await api('/compliance/summary');
+  kpis.innerHTML=`
+    <div><b>INR ${s.net_gst_payable}</b><span>Net GST payable</span></div>
+    <div><b>INR ${s.tds_payable}</b><span>TDS payable</span></div>
+    <div><b>INR ${s.tcs_payable}</b><span>TCS payable</span></div>
+    <div><b>INR ${s.pf_payable}</b><span>PF payable</span></div>
+    <div><b>INR ${s.esi_payable}</b><span>ESI payable</span></div>
+    <div><b>${s.audit_events}</b><span>Audit events</span></div>`;
+  const rows=[['Output GST',s.output_gst],['Input GST (credit)',s.input_gst],['Net GST payable',s.net_gst_payable],['TDS payable',s.tds_payable],['PF payable',s.pf_payable],['ESI payable',s.esi_payable],['PT payable',s.pt_payable],['TCS payable',s.tcs_payable]];
+  document.querySelector('#payTab tbody').innerHTML=rows.map(r=>`<tr><td>${r[0]}</td><td>INR ${r[1]}</td></tr>`).join('');
+  const a=await api('/compliance/audit');auditout.textContent=`Audit trail: ${a.events} events — ${a.note}`;
+}
+init();
+</script>
+</body>
+</html>

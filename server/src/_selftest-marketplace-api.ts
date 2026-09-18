@@ -1,0 +1,97 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const tempDir = mkdtempSync(join(tmpdir(), 'epic-marketplace-api-'));
+process.env.EPIC_DATA_FILE = join(tempDir, 'legacy.json');
+process.env.EPIC_DB_FILE = join(tempDir, 'epic.sqlite');
+process.env.EPIC_LEGACY_JSON_FILE = process.env.EPIC_DATA_FILE;
+let closeStore: (() => void) | undefined;
+try {
+  const Fastify = (await import('fastify')).default;
+  const { store } = await import('./kernel/store.js');
+  const { registerApi } = await import('./api.js');
+  const { createDeviceEnrollment, receiveMarketplaceOrder, registerMarketplaceDevice } = await import('./modules/marketplace/edge-sync.js');
+  closeStore = () => store.close();
+  const app = Fastify(); registerApi(app);
+  const boot = await app.inject({ method: 'POST', url: '/api/auth/bootstrap', payload: { username: 'marketplace-owner', password: 'StrongMarketplacePassword!26', tenant: 'MKT-API', storeId: 'STORE-API', businessName: 'Marketplace API Laundry' } });
+  assert.equal(boot.statusCode, 200, 'owner bootstrap succeeds for marketplace API contract test');
+  const headers = { cookie: String(boot.headers['set-cookie']).split(';')[0] };
+  const tenant = 'MKT-API'; const storeId = 'STORE-API'; const enrollment = store.withStoreScope(tenant, storeId, () => createDeviceEnrollment());
+  const device = store.withStoreScope(tenant, storeId, () => registerMarketplaceDevice(tenant, 'marketplace-owner', { deviceId: enrollment.deviceId, vendorId: 'VENDOR-API', publicKey: enrollment.publicKey, credentialRef: 'sim://marketplace-api', status: 'Registered' }));
+  const incoming = {
+    eventId: 'marketplace-api-order-001', source: 'simulator', tenantId: tenant, vendorId: 'VENDOR-API', storeId, deviceId: device.id,
+    aggregateType: 'marketplace_order', aggregateId: 'EXT-API-001', aggregateVersion: 1, eventType: 'marketplace.order.assigned.v1', eventVersion: 1, occurredAt: new Date().toISOString(),
+    payload: { externalOrderId: 'EXT-API-001', channel: 'CUSTOMER_APP', state: 'AwaitingAcceptance', orderNumber: 'APP-001', customer: { name: 'Kavya Nair' }, pickup: { address: '12 API Lane', requestedSlot: '10:00-12:00' } },
+  };
+  store.withStoreScope(tenant, storeId, () => receiveMarketplaceOrder(tenant, 'marketplace-owner', incoming));
+  const status = await app.inject({ method: 'GET', url: '/api/marketplace/sync/status', headers });
+  assert.equal(status.statusCode, 200, 'owner can inspect marketplace sync diagnostics');
+  assert.equal(status.json().configured, true, 'diagnostics identify a registered marketplace device');
+  const availabilityBefore = await app.inject({ method: 'GET', url: '/api/marketplace/availability', headers });
+  assert.equal(availabilityBefore.json().state, 'NotConfigured', 'marketplace availability starts explicitly unconfigured');
+  const availabilitySave = await app.inject({ method: 'PUT', url: '/api/marketplace/availability', headers: { ...headers, 'idempotency-key': 'marketplace-api-availability-001' }, payload: { state: 'Open', serviceZones: ['Central'], capacity: { orders: 40, bags: 80, kg: 250, stops: 30 }, capabilities: { pickup: true, delivery: true, express: false }, staleAfterMinutes: 45, leadTimeMinutes: 120 } });
+  assert.equal(availabilitySave.statusCode, 200, 'owner can persist an explicit marketplace availability projection');
+  assert.equal(availabilitySave.json().state, 'Open', 'availability preserves the configured store state');
+  const orders = await app.inject({ method: 'GET', url: '/api/marketplace/orders?state=AwaitingAcceptance&limit=20', headers });
+  assert.equal(orders.statusCode, 200, 'authenticated operator can load the online order queue');
+  assert.equal(orders.json().items.length, 1, 'queue returns the store-scoped external order once');
+  const externalSearch = await app.inject({ method: 'GET', url: '/api/laundry/search?q=EXT-API-001', headers });
+  assert.equal(externalSearch.statusCode, 200, 'global search accepts an external marketplace order reference');
+  assert.ok(externalSearch.json().some((result: { kind: string; detail: string }) => result.kind === 'marketplace-order' && result.detail.includes('EXT-API-001')), 'global search returns the marketplace order identity');
+  const dashboard = await app.inject({ method: 'GET', url: '/api/laundry/dashboard', headers });
+  assert.equal(dashboard.statusCode, 200, 'dashboard remains available with marketplace projections');
+  assert.equal(dashboard.json().marketplace.newOrders, 1, 'dashboard new-order count comes from the persisted online queue');
+  assert.equal(dashboard.json().marketplace.channelBreakdown.CUSTOMER_APP, 1, 'dashboard channel breakdown uses explicit order channel identity');
+  const customerStatusBefore = await app.inject({ method: 'GET', url: '/api/marketplace/orders/EXT-API-001/customer-status', headers });
+  assert.equal(customerStatusBefore.statusCode, 200, 'operator can inspect the evidence-backed customer status projection');
+  assert.equal(customerStatusBefore.json().status, 'AwaitingAcceptance', 'customer status starts from the real marketplace request state');
+  const statusMapping = await app.inject({ method: 'GET', url: '/api/marketplace/customer-status-mapping', headers });
+  assert.equal(statusMapping.statusCode, 200, 'operator can inspect the configured customer status mapping');
+  store.withStoreScope(tenant, storeId, () => store.insertRow({ id: 'LOCAL-API-ORDER-001', entity: 'laundry_order', tenant, status: 'Booked', version: 1, created_by: 'marketplace-owner', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), data: { name: 'LOCAL-API-ORDER-001', state: 'Booked' } }));
+  const link = await app.inject({ method: 'POST', url: '/api/marketplace/orders/EXT-API-001/link', headers: { ...headers, 'idempotency-key': 'marketplace-api-link-001' }, payload: { localOrderId: 'LOCAL-API-ORDER-001' } });
+  assert.equal(link.statusCode, 200, 'operator can explicitly bind an online projection to a physical local order');
+  assert.equal(link.json().projection.localOrderId, 'LOCAL-API-ORDER-001', 'projection stores the stable local operational identity');
+  const intake = await app.inject({ method: 'POST', url: '/api/marketplace/orders/EXT-API-001/intake', headers: { ...headers, 'idempotency-key': 'marketplace-api-intake-001' }, payload: { actual: { pieces: 6 }, reason: 'physical count at counter' } });
+  assert.equal(intake.statusCode, 200, 'operator can record physical intake separately from the online request');
+  const reassessment = await app.inject({ method: 'POST', url: '/api/marketplace/orders/EXT-API-001/reassessment', headers: { ...headers, 'idempotency-key': 'marketplace-api-reassessment-001' }, payload: { previousAmountPaise: 10000, revisedAmountPaise: 12500, tolerancePaise: 100, reason: 'actual pieces differ from estimate' } });
+  assert.equal(reassessment.json().data.state, 'PendingApproval', 'material reassessment is blocked pending customer approval');
+  const customerStatusApproval = await app.inject({ method: 'GET', url: '/api/marketplace/orders/EXT-API-001/customer-status', headers });
+  assert.equal(customerStatusApproval.json().status, 'ApprovalRequired', 'customer status exposes an actual reassessment approval requirement');
+  const approval = await app.inject({ method: 'POST', url: `/api/marketplace/reassessments/${reassessment.json().id}/approve`, headers: { ...headers, 'idempotency-key': 'marketplace-api-approval-001' }, payload: {} });
+  assert.equal(approval.json().data.state, 'Approved', 'approval route records the final reassessment decision');
+  const accept = await app.inject({ method: 'POST', url: '/api/marketplace/orders/EXT-API-001/accept', headers: { ...headers, 'idempotency-key': 'marketplace-api-accept-001' }, payload: {} });
+  assert.equal(accept.statusCode, 200, 'operator can accept an awaiting marketplace order');
+  assert.equal(accept.json().order.state, 'Accepted', 'accepted action updates the local operational projection');
+  const pickup = await app.inject({ method: 'POST', url: '/api/marketplace/orders/EXT-API-001/pickup/schedule', headers: { ...headers, 'idempotency-key': 'marketplace-api-pickup-001' }, payload: { scheduledDate: '2026-09-04', window: '10:00-12:00', riderId: 'rider-api-1', serviceZone: 'Central' } });
+  assert.equal(pickup.statusCode, 201, 'operator can schedule an online-order pickup with a local rider assignment');
+  assert.equal(pickup.json().projection.state, 'PickupScheduled', 'pickup scheduling advances the versioned order projection');
+  const pickupStatus = await app.inject({ method: 'GET', url: '/api/marketplace/orders/EXT-API-001/customer-status', headers });
+  assert.equal(pickupStatus.json().status, 'PickupScheduled', 'customer status gives explicit pickup evidence precedence over a linked booked order');
+  const acceptedRetry = await app.inject({ method: 'POST', url: '/api/marketplace/orders/EXT-API-001/accept', headers: { ...headers, 'idempotency-key': 'marketplace-api-accept-001' }, payload: {} });
+  assert.equal(acceptedRetry.json().event.eventId, accept.json().event.eventId, 'operator command retry returns the original durable outbound event');
+  const settlement = await app.inject({ method: 'POST', url: '/api/marketplace/settlements', headers: { ...headers, 'idempotency-key': 'marketplace-api-settlement-001' }, payload: { externalOrderId: 'EXT-API-001', policyVersion: 'policy-api-2026-01', customerCollectedPaise: 10000, vendorServiceGrossPaise: 9000, commissionBps: 1000 } });
+  assert.equal(settlement.statusCode, 201, 'operator can persist a reconciled marketplace settlement');
+  const statement = await app.inject({ method: 'GET', url: '/api/marketplace/settlements/EXT-API-001/statement/print', headers });
+  assert.equal(statement.statusCode, 200, 'operator can print the canonical marketplace settlement statement');
+  assert.match(statement.body, /Marketplace Settlement Statement/, 'settlement statement renderer is exposed through the operator API');
+  assert.match(statement.body, /not a customer tax invoice/, 'settlement statement clearly disclaims tax-invoice/provider-success semantics');
+  const settlementSearch = await app.inject({ method: 'GET', url: '/api/laundry/search?q=policy-api-2026-01', headers });
+  assert.equal(settlementSearch.statusCode, 200, 'global search accepts a settlement policy reference');
+  assert.ok(settlementSearch.json().some((result: { kind: string }) => result.kind === 'settlement'), 'global search returns marketplace settlement evidence');
+  const batch = await app.inject({ method: 'POST', url: '/api/marketplace/settlement-batches', headers: { ...headers, 'idempotency-key': 'marketplace-api-batch-001' }, payload: { batchId: 'BATCH-API-001', policyVersion: 'policy-api-2026-01', settlementIds: [settlement.json().id] } });
+  assert.equal(batch.statusCode, 201, 'operator can prepare a settlement batch from immutable settlement records');
+  const payout = await app.inject({ method: 'POST', url: '/api/marketplace/settlement-batches/BATCH-API-001/payout-attempts', headers: { ...headers, 'idempotency-key': 'marketplace-api-payout-001' }, payload: { attemptId: 'PAYOUT-API-001', provider: 'configured-provider', amountPaise: settlement.json().data.vendorSettlementPaise, idempotencyKey: 'provider-payout-idem-001' } });
+  assert.equal(payout.statusCode, 201, 'operator can create a provider-pending payout attempt');
+  assert.equal(payout.json().data.state, 'PendingProvider', 'payout attempt remains pending until verified provider evidence arrives');
+  const payoutRead = await app.inject({ method: 'GET', url: '/api/marketplace/payout-attempts/PAYOUT-API-001', headers });
+  assert.equal(payoutRead.statusCode, 200, 'operator can inspect payout attempt evidence state');
+  const noAuth = await app.inject({ method: 'GET', url: '/api/marketplace/orders' });
+  assert.equal(noAuth.statusCode, 401, 'online order queue is never exposed without an authenticated local session');
+  await app.close();
+  console.log('PASS  marketplace operator API contract self-test complete');
+} finally {
+  closeStore?.();
+  rmSync(tempDir, { recursive: true, force: true });
+}

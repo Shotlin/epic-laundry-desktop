@@ -1,0 +1,21 @@
+# Epic BOS - one-command on-prem / cloud deploy.
+#   docker compose up -d   ->  http://localhost:3001/ui/
+services:
+  epic-bos:
+    build: .
+    container_name: epic-bos
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=3001
+      - EPIC_DATA_FILE=/app/data/epic.json
+      - GSP_PROVIDER=sandbox
+      # - EPIC_API_KEY=change-me-in-prod
+      # - GSP_PROVIDER=cleartax   # or your GSP when going live
+    volumes:
+      - epic-data:/app/data
+
+volumes:
+  epic-data:

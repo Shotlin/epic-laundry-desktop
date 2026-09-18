@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS — Inventory</title>
+<style>
+  :root{--bg:#0f1117;--card:#1a1d27;--ink:#e7e9ee;--muted:#9aa1b2;--brand:#5b8cff;--ok:#3ecf8e;--warn:#ffb454}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{padding:16px 24px;display:flex;gap:12px;align-items:center;border-bottom:1px solid #232735}
+  header a{color:var(--muted);text-decoration:none}
+  main{padding:24px}
+  .card{background:var(--card);border:1px solid #232735;border-radius:12px;padding:16px;margin-bottom:18px}
+  h2{margin:0 0 12px;font-size:15px}
+  label{display:block;color:var(--muted);font-size:12px;margin:8px 0 3px}
+  input,select{width:100%;background:#0f1117;border:1px solid #2a2f3d;color:var(--ink);border-radius:8px;padding:8px}
+  button{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:9px 14px;cursor:pointer;margin-top:12px}
+  button.ghost{background:#2a2f3d}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:8px 6px;border-bottom:1px solid #232735;font-size:13px}
+  .low{color:var(--warn);font-weight:600}
+  .tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+  .tab{background:#232735;color:var(--ink);border:1px solid #2a2f3d;border-radius:20px;padding:7px 14px;cursor:pointer}
+  .tab.active{background:var(--brand);border-color:var(--brand)}
+  .row{display:flex;gap:8px} .row>*{flex:1}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .total{margin-top:10px;font-weight:600}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<header><a href="/ui/">← Epic BOS</a><b>📦 Inventory</b></header>
+<div class="tabs" style="padding:16px 24px 0">
+  <div class="tab active" data-t="balances">Stock Balances</div>
+  <div class="tab" data-t="valuation">Valuation</div>
+  <div class="tab" data-t="serials">Serials</div>
+  <div class="tab" data-t="batches">Batches</div>
+  <div class="tab" data-t="recon">Reconcile</div>
+  <div class="tab" data-t="landed">Landed Cost</div>
+  <div class="tab" data-t="new">New Stock Entry</div>
+</div>
+<main>
+  <section id="balances"><div class="card">
+    <h2>Stock Balances</h2>
+    <table id="grid"><thead><tr><th>Item</th><th>Warehouse</th><th>Qty</th><th></th></tr></thead><tbody></tbody></table>
+  </div></section>
+
+  <section id="valuation" class="hidden"><div class="card">
+    <h2>Inventory Valuation <span id="vtotal" class="total"></span></h2>
+    <label>Method</label>
+    <select id="vmethod"><option value="moving-average">Moving Average</option><option value="fifo">FIFO</option></select>
+    <table id="vgrid"><thead><tr><th>Item</th><th>Warehouse</th><th>Qty</th><th>Rate</th><th>Value</th></tr></thead><tbody></tbody></table>
+    <div class="total" id="vfoot"></div>
+  </div></section>
+
+  <section id="serials" class="hidden"><div class="card">
+    <h2>Live Serial Numbers</h2>
+    <table id="sgrid"><thead><tr><th>Serial</th><th>Item</th><th>Warehouse</th><th>Status</th></tr></thead><tbody></tbody></table>
+  </div></section>
+
+  <section id="batches" class="hidden"><div class="card">
+    <h2>Batch Stock</h2>
+    <table id="bgrid"><thead><tr><th>Item</th><th>Warehouse</th><th>Batch</th><th>Qty</th></tr></thead><tbody></tbody></table>
+  </div></section>
+
+  <section id="recon" class="hidden"><div class="card">
+    <h2>Stock Reconciliation</h2>
+    <label>Posting date</label><input id="rdate" type="date"/>
+    <label>Item</label><select id="ritem"></select>
+    <label>Warehouse</label><select id="rwh"></select>
+    <label>Physical qty</label><input id="rq" type="number" placeholder="0"/>
+    <label>Valuation rate</label><input id="rr" type="number" placeholder="0"/>
+    <button onclick="doRecon()">Submit Reconciliation</button>
+  </div></section>
+
+  <section id="landed" class="hidden"><div class="card">
+    <h2>Landed Cost Voucher</h2>
+    <label>Reference Stock Entry (Material Receipt)</label><select id="lref"></select>
+    <div id="litems"></div>
+    <button class="ghost" onclick="addCost()">+ Add cost line</button>
+    <button onclick="doLanded()">Submit Landed Cost</button>
+  </div></section>
+
+  <section id="new" class="hidden"><div class="card">
+    <h2>New Stock Entry</h2>
+    <label>Type</label><select id="type"><option>Material Receipt</option><option>Stock Issue</option><option>Stock Transfer</option><option>Manufacture</option></select>
+    <label>Posting date</label><input id="date" type="date"/>
+    <label>From warehouse</label><select id="from"></select>
+    <label>To warehouse</label><select id="to"></select>
+    <div id="items"></div>
+    <button class="ghost" onclick="addRow()">+ Add item</button>
+    <button onclick="save()">Submit Stock Entry</button>
+  </div></section>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+let ITEMS=[], WH=[], RECEIPTS=[];
+function rowHtml(){return `<div class="row" style="margin-top:8px"><select class="it"></select><input class="q" type="number" placeholder="qty"/><input class="r" type="number" placeholder="rate"/><input class="ser" placeholder="serials (space sep)"/><input class="bat" placeholder="batch"/></div>`;}
+function costHtml(){return `<div class="row" style="margin-top:8px"><select class="cit"></select><input class="camt" type="number" placeholder="amount"/></div>`;}
+function addRow(){document.getElementById('items').insertAdjacentHTML('beforeend',rowHtml());fillItems();}
+function addCost(){document.getElementById('litems').insertAdjacentHTML('beforeend',costHtml());fillItems(document.querySelectorAll('.cit'));}
+function fillItems(sels){sels=sels||document.querySelectorAll('.it');sels.forEach(s=>{const v=s.value;s.innerHTML=ITEMS.map(i=>`<option value="${i.id}">${i.data.name}</option>`).join('');s.value=v;});}
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.querySelectorAll('main section').forEach(s=>s.classList.add('hidden'));document.getElementById(t.dataset.t).classList.remove('hidden');if(t.dataset.t==='valuation')loadVal();if(t.dataset.t==='serials')loadSerials();if(t.dataset.t==='batches')loadBatches();if(t.dataset.t==='recon'){ritem.innerHTML=ITEMS.map(i=>`<option value="${i.id}">${i.data.name}</option>`).join('');}if(t.dataset.t==='landed'){lref.innerHTML=RECEIPTS.map(r=>`<option value="${r.id}">${r.data.name}</option>`).join('');}});
+async function load(){
+  const stk=await api('/inventory/stock'); WH=stk.warehouses; ITEMS=await api('/item');
+  RECEIPTS=(await api('/stock_entry')).filter(r=>r.data.stock_type==='Material Receipt');
+  const tb=document.querySelector('#grid tbody');tb.innerHTML='';
+  for(const it of stk.items){
+    for(const [wh,q] of Object.entries(it.by_warehouse||{})){
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td>${it.name}</td><td>${stk.warehouses.find(w=>w.id===wh)?.name||wh}</td><td class="${it.low&&q<=it.reorder?'low':''}">${q}</td><td>${it.low&&q<=it.reorder?'⚠ low':''}</td>`;
+      tb.appendChild(tr);
+    }
+  }
+  from.innerHTML=WH.map(w=>`<option value="${w.id}">${w.data.name}</option>`).join('');
+  to.innerHTML='<option value="">—</option>'+WH.map(w=>`<option value="${w.id}">${w.data.name}</option>`).join('');
+  rwh.innerHTML=WH.map(w=>`<option value="${w.id}">${w.data.name}</option>`).join('');
+  if(!document.querySelector('.it'))addRow();
+}
+async function loadVal(){
+  const m=vmethod.value; const d=await api('/inventory/valuation?method='+m);
+  vtotal.textContent='— '+m;
+  const tb=document.querySelector('#vgrid tbody');tb.innerHTML='';
+  for(const l of d.lines){const tr=document.createElement('tr');tr.innerHTML=`<td>${l.itemName||l.item}</td><td>${WH.find(w=>w.id===l.warehouse)?.data.name||l.warehouse}</td><td>${l.qty}</td><td>${l.rate}</td><td>${l.value}</td>`;tb.appendChild(tr);}
+  vfoot.textContent='Total inventory value: ₹'+d.total;
+}
+async function loadSerials(){const d=await api('/inventory/serials');const tb=document.querySelector('#sgrid tbody');tb.innerHTML='';for(const s of d){const tr=document.createElement('tr');tr.innerHTML=`<td>${s.serial_no}</td><td>${s.itemName||s.item}</td><td>${WH.find(w=>w.id===s.warehouse)?.data.name||s.warehouse}</td><td>${s.status}</td>`;tb.appendChild(tr);}}
+async function loadBatches(){const d=await api('/inventory/batches');const tb=document.querySelector('#bgrid tbody');tb.innerHTML='';for(const b of d){const tr=document.createElement('tr');tr.innerHTML=`<td>${b.itemName||b.item}</td><td>${WH.find(w=>w.id===b.warehouse)?.data.name||b.warehouse}</td><td>${b.batch_no}</td><td>${b.qty}</td>`;tb.appendChild(tr);}}
+async function doRecon(){const body={posting_date:rdate.value,items:[{item:ritem.value,warehouse:rwh.value,qty:Number(rq.value),rate:Number(rr.value||0)}]};if(!ritem.value||!rwh.value||rq.value===''){alert('Item, warehouse & qty required');return;}const r=await api('/stock_reconciliation',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});if(r.error){alert(r.error);return;}await api('/stock_reconciliation/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});alert('Reconciliation '+r.id+' posted');load();}
+async function doLanded(){const items=[...document.querySelectorAll('#litems .row')].map(r=>({item:r.querySelector('.cit').value,amount:Number(r.querySelector('.camt').value||0)})).filter(i=>i.item&&i.amount>0);if(!lref.value||!items.length){alert('Pick a receipt and at least one cost line');return;}const body={posting_date:new Date().toISOString().slice(0,10),receipt:lref.value,items};const r=await api('/landed_cost_voucher',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});if(r.error){alert(r.error);return;}await api('/landed_cost_voucher/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});alert('Landed cost '+r.id+' applied');loadVal();}
+async function save(){
+  const items=[...document.querySelectorAll('#items .row')].map(r=>({item:r.querySelector('.it').value,qty:Number(r.querySelector('.q').value),rate:Number(r.querySelector('.r').value||0),serial_nos:r.querySelector('.ser').value, batch_no:r.querySelector('.bat').value}));
+  if(!items.length||items.some(i=>!i.item||!i.qty)){alert('Add at least one item with qty');return;}
+  const body={stock_type:type.value,posting_date:date.value,from_warehouse:from.value||undefined,to_warehouse:to.value||undefined,items};
+  const r=await api('/stock_entry',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});
+  if(r.error){alert(r.error);return;}
+  await api('/stock_entry/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});
+  load();
+}
+date.value=new Date().toISOString().slice(0,10);rdate.value=date.value;vmethod.onchange=loadVal;
+load();
+</script>
+</body>
+</html>

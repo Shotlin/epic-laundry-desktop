@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS — Accounting</title>
+<style>
+  :root{--bg:#0f1117;--card:#1a1d27;--ink:#e7e9ee;--muted:#9aa1b2;--brand:#5b8cff;--ok:#3ecf8e}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{padding:16px 24px;display:flex;gap:12px;align-items:center;border-bottom:1px solid #232735}
+  header a{color:var(--muted);text-decoration:none}
+  main{padding:24px}
+  .tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+  .tabs button{background:#232735;color:var(--muted);border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
+  .tabs button.on{background:var(--brand);color:#fff}
+  .card{background:var(--card);border:1px solid #232735;border-radius:12px;padding:16px;margin-bottom:14px}
+  h2{margin:0 0 12px;font-size:15px}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid #232735;font-size:13px}
+  .r{text-align:right}.pos{color:var(--ok)}.neg{color:#ff7a7a}
+  .bal{font-weight:700;margin-top:10px}.hide{display:none}
+  input,select{background:#0c0f18;border:1px solid #2a3145;color:var(--ink);border-radius:8px;padding:7px;margin:3px}
+  button.act{background:linear-gradient(135deg,var(--brand),#7a5bff);color:#fff;border:0;border-radius:9px;padding:9px 14px;cursor:pointer;font-weight:600}
+  .grow input,.grow select{flex:1}
+</style>
+</head>
+<body>
+<header><a href="/ui/">← Epic BOS</a><b>📒 Accounting</b>
+  <span style="margin-left:auto" class="muted">Cost Center:
+    <select id="ccFilter"><option value="">All</option></select>
+  </span>
+</header>
+<main>
+  <div class="tabs">
+    <button class="on" onclick="show('tb',this)">Trial Balance</button>
+    <button onclick="show('pnl',this)">Profit & Loss</button>
+    <button onclick="show('bs',this)">Balance Sheet</button>
+    <button onclick="show('je',this)">Journal Entry</button>
+    <button onclick="show('cc',this)">Cost Centers</button>
+    <button onclick="show('bdg',this)">Budgets</button>
+  </div>
+  <div id="tb" class="card"><h2>Trial Balance</h2><table id="tbt"><thead><tr><th>Account</th><th>Type</th><th class="r">Debit</th><th class="r">Credit</th></tr></thead><tbody></tbody></table><div class="bal" id="tbbal"></div></div>
+  <div id="pnl" class="card hide"><h2>Profit & Loss</h2><table id="pnlt"><tbody></tbody></table><div class="bal" id="pnlnet"></div></div>
+  <div id="bs" class="card hide"><h2>Balance Sheet</h2><div id="bsbody"></div></div>
+
+  <div id="je" class="card hide"><h2>✍️ Journal Entry</h2>
+    <input id="je_date" type="date"/><button class="act" onclick="addRow()">+ Row</button>
+    <div id="je_rows" class="grow" style="display:flex;flex-direction:column;gap:6px;margin:10px 0"></div>
+    <button class="act" onclick="saveJE()">Save & Submit</button><span id="je_msg" class="muted"></span>
+  </div>
+
+  <div id="cc" class="card hide"><h2>🏷️ Cost Centers</h2>
+    <div class="grow" style="display:flex"><input id="cc_name" placeholder="name"/><input id="cc_parent" placeholder="parent id (blank)"/><button class="act" onclick="mkCC()">Add</button></div>
+    <div id="cc_list" style="margin-top:10px"></div>
+  </div>
+
+  <div id="bdg" class="card hide"><h2>🎯 Budgets</h2>
+    <div class="grow" style="display:flex;flex-wrap:wrap">
+      <input id="b_name" placeholder="name"/><input id="b_fy" placeholder="FY e.g. 2026-27"/>
+      <input id="b_cc" placeholder="cost center id (blank)"/><input id="b_acct" placeholder="account (blank)"/>
+      <input id="b_amt" type="number" placeholder="amount"/><input id="b_pct" type="number" placeholder="alert% 80" style="width:90px"/>
+      <button class="act" onclick="mkBdg()">Add</button>
+    </div>
+    <div id="bdg_list" style="margin-top:10px"></div>
+  </div>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+const post=(p,b)=>api(p,{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify(b)});
+const f=n=>(n||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+let optAcct=[],optCC=[];
+function show(id,btn){document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');['tb','pnl','bs','je','cc','bdg'].forEach(x=>document.getElementById(x).classList.toggle('hide',x!==id));}
+const ccParam=()=>document.getElementById('ccFilter').value?('?cost_center='+encodeURIComponent(document.getElementById('ccFilter').value)):'';
+async function load(){
+  const tb=await api('/accounting/trial-balance'+ccParam());
+  const t=document.querySelector('#tbt tbody');t.innerHTML='';
+  for(const l of tb.lines){const tr=document.createElement('tr');tr.innerHTML=`<td>${l.account}</td><td>${l.type}</td><td class="r">${l.debit?f(l.debit):''}</td><td class="r">${l.credit?f(l.credit):''}</td>`;t.appendChild(tr);}
+  document.getElementById('tbbal').innerHTML=`Total ₹${f(tb.totalDebit)} / ₹${f(tb.totalCredit)} — ${tb.balanced?'<span class="pos">BALANCED ✓</span>':'<span class="neg">OUT OF BALANCE ✗</span>'}`;
+  const p=await api('/accounting/pnl'+ccParam());
+  document.querySelector('#pnlt tbody').innerHTML=`<tr><td>Income</td><td class="r pos">₹${f(p.income)}</td></tr><tr><td>Expense</td><td class="r neg">₹${f(p.expense)}</td></tr>`;
+  document.getElementById('pnlnet').innerHTML=`Net: <span class="${p.netProfit>=0?'pos':'neg'}">₹${f(p.netProfit)}</span>`;
+  const bs=await api('/accounting/balancesheet'+ccParam());
+  const sec=(title,rows)=>`<h3 style="font-size:13px;color:var(--muted)">${title}</h3><table>${rows.map(r=>`<tr><td>${r.account}</td><td class="r">₹${f(r.amount)}</td></tr>`).join('')}</table>`;
+  document.getElementById('bsbody').innerHTML=sec('Assets',bs.assets)+sec('Liabilities',bs.liabilities)+sec('Equity',bs.equity)+`<div class="bal">Retained Earnings ₹${f(bs.retainedEarnings)}</div><div class="bal ${bs.balanced?'pos':'neg'}">Assets ₹${f(bs.totalAssets)} = Liab+Equity ₹${f(bs.totalEquityLiabilities)} ${bs.balanced?'✓':'✗'}</div>`;
+  optAcct=(await api('/account')).map(a=>`<option value="${a.id}">${a.data.name}</option>`).join('');
+  optCC=(await api('/cost_center')).map(c=>`<option value="${c.id}">${c.data.name}</option>`).join('');
+  document.getElementById('ccFilter').innerHTML=`<option value="">All</option>`+optCC;
+  refreshCC();refreshBdg();
+}
+document.getElementById('ccFilter').onchange=load;
+function addRow(){const d=document.createElement('div');d.style.display='flex';d.style.gap='6px';d.innerHTML=`<select class="acc">${optAcct}</select><input class="dr" type="number" placeholder="debit" style="width:110px"/><input class="cr" type="number" placeholder="credit" style="width:110px"/><select class="cc">${optCC}</select>`;document.getElementById('je_rows').appendChild(d);}
+async function saveJE(){const rows=[...document.querySelectorAll('#je_rows>div')].map(d=>({account:d.querySelector('.acc').value,debit:Number(d.querySelector('.dr').value)||0,credit:Number(d.querySelector('.cr').value)||0,cost_center:d.querySelector('.cc').value||undefined})).filter(r=>r.account&&(r.debit||r.credit));if(!rows.length)return msg('add at least one row');const je=await post('/journal_entry',{posting_date:document.getElementById('je_date').value,voucher_type:'Journal Entry',entries:rows});if(je.error)return msg(je.error);const s=await post('/journal_entry/'+je.id+'/submit');if(s.error)return msg(s.error);msg('Journal '+je.id+' posted ✓');document.getElementById('je_rows').innerHTML='';load();}
+function msg(m){document.getElementById('je_msg').textContent=m;}
+async function mkCC(){const r=await post('/cost_center',{name:document.getElementById('cc_name').value,parent:document.getElementById('cc_parent').value||undefined});if(r.id){document.getElementById('cc_name').value='';refreshCC();load();}}
+async function refreshCC(){const l=await api('/cost_center');document.getElementById('cc_list').innerHTML=table(['ID','Name','Parent'],[...l].map(x=>[x.id,x.data.name,x.data.parent||'—']));}
+async function mkBdg(){const b={name:document.getElementById('b_name').value,fiscal_year:document.getElementById('b_fy').value,cost_center:document.getElementById('b_cc').value||undefined,account:document.getElementById('b_acct').value||undefined,budget_amount:Number(document.getElementById('b_amt').value)||0,alert_at_pct:Number(document.getElementById('b_pct').value)||80};if(!b.name||!b.fiscal_year)return;const r=await post('/budget',b);if(r.id){refreshBdg();load();}}
+async function refreshBdg(){const l=await api('/budget');document.getElementById('bdg_list').innerHTML=table(['ID','Name','FY','Scope','Budget','Alert%'],[...l].map(x=>[x.id,x.data.name,x.data.fiscal_year,x.data.account||x.data.cost_center||'co',f(x.data.budget_amount),x.data.alert_at_pct||80]));}
+const table=(h,rows)=>`<table><thead><tr>${h.map(x=>`<th>${x}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+addRow();
+load();
+</script>
+</body>
+</html>

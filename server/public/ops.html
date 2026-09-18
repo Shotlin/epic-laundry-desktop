@@ -1,0 +1,84 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS - Operations Center</title>
+<style>
+  :root{--bg:#0f1117;--card:#1a1d27;--ink:#e7e9ee;--muted:#9aa1b2;--brand:#5b8cff;--ok:#3ecf8e;--warn:#ffb454;--bad:#ff6b6b}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink);padding:20px}
+  header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+  h1{font-size:18px;margin:0}
+  .tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .tabs button{background:var(--card);border:1px solid #232735;color:var(--muted);padding:8px 14px;border-radius:10px;cursor:pointer}
+  .tabs button.on{color:#fff;border-color:var(--brand)}
+  .card{background:var(--card);border:1px solid #232735;border-radius:14px;padding:18px;margin-bottom:14px}
+  table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px;border-bottom:1px solid #232735}
+  button.act{background:linear-gradient(135deg,var(--brand),#7a5bff);color:#fff;border:0;border-radius:10px;padding:9px 14px;cursor:pointer;font-weight:600}
+  input,select{background:#0c0f18;border:1px solid #2a3145;color:var(--ink);border-radius:8px;padding:8px;margin:4px 4px 4px 0}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#0c0f18;border:1px solid #2a3145}
+  .urgent{color:var(--bad)} .ok{color:var(--ok)} .muted{color:var(--muted)}
+  #toast{position:fixed;bottom:18px;right:18px;background:#222;padding:10px 14px;border-radius:10px;opacity:0;transition:.3s}
+</style>
+</head>
+<body>
+<header><h1>⚙️ Operations Center</h1><a class="pill" href="/ui/">← Dashboard</a></header>
+<div class="tabs">
+  <button data-t="alerts" class="on">🔔 Alerts</button>
+  <button data-t="reorder">📦 Reorder</button>
+  <button data-t="subs">🔁 Subscriptions</button>
+  <button data-t="pricing">🏷️ Pricing Rules</button>
+  <button data-t="backup">💾 Backup</button>
+</div>
+<div id="view"></div>
+<div id="toast"></div>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+const post=(p,b)=>api(p,{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify(b)});
+const toast=(m)=>{const t=document.getElementById('toast');t.textContent=m;t.style.opacity=1;setTimeout(()=>t.style.opacity=0,2200);};
+const show=(html)=>document.getElementById('view').innerHTML=html;
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('on'));b.classList.add('on');render(b.dataset.t);});
+
+async function render(t){
+  if(t==='alerts'){const d=await api('/ops/alerts');show(`
+    <div class="card"><b>Owner alerts</b> — <span class="pill">${d.counts.overdue} overdue</span> <span class="pill">${d.counts.reorder} low-stock</span> <span class="pill">${d.counts.gst} GST</span> <span class="pill">${d.counts.subscriptions} renewals</span></div>
+    <div class="card"><h3>⏰ Overdue receivables (>30d)</h3>${d.overdue.length?table(['Invoice','Customer','Age(d)','Due'],d.overdue.map(x=>[x.name,x.customer,x.age,'₹'+x.due])):'<p class="muted">None 🎉</p>'}</div>
+    <div class="card"><h3>📦 Low stock</h3>${d.reorder.length?table(['Item','On hand','Reorder','Short'],d.reorder.map(x=>[x.name,x.on_hand,x.reorder_level,x.shortfall])):'<p class="muted">None</p>'}</div>
+    <div class="card"><h3>🏛️ GST due dates</h3>${d.gst.map(x=>`<p class="${x.urgent?'urgent':''}">${x.return}: <b>${x.due}</b> (in ${x.in_days}d) ${x.urgent?'⚠️':''}</p>`).join('')}</div>
+    <div class="card"><h3>🔁 Renewals due ≤7d</h3>${d.subscriptions_due.length?table(['Sub','Customer','Next'],d.subscriptions_due.map(x=>[x.name,x.customer,x.next])):'<p class="muted">None</p>'}</div>`);}
+  if(t==='reorder'){const d=await api('/ops/reorder');show(`
+    <div class="card"><h3>📦 Reorder suggestions</h3>${d.length?table(['Item','On hand','Reorder','Short'],d.map(x=>[x.name,x.on_hand,x.reorder_level,x.shortfall]))+'<div style="margin-top:10px"><input id="sup" placeholder="supplier id (PRT-)"/><button class="act" onclick="mkPO()">Create draft PO</button></div>':'<p class="muted">Nothing below reorder level</p>'}</div>`);}
+  if(t==='subs'){const d=await api('/subscription');show(`
+    <div class="card"><h3>➕ New subscription</h3>
+      Customer <input id="s_cust" placeholder="PRT-"/><select id="s_f"><option>Monthly</option><option>Quarterly</option><option>Yearly</option></select>
+      Next <input id="s_next" type="date"/><button class="act" onclick="mkSub()">Create</button>
+      <div class="muted" style="margin-top:6px">Items: <input id="s_items" placeholder='[{"item":"ITM-..","qty":1,"rate":100,"gst_rate":18}]' style="width:70%"/></div></div>
+    <div class="card"><button class="act" onclick="runRec()">Run recurring (asOf today)</button> <span class="muted">catches up all due subscriptions</span>
+      <div id="sublist" style="margin-top:10px"></div></div>`);refreshSubs();}
+  if(t==='pricing'){const d=await api('/pricing_rule');show(`
+    <div class="card"><h3>➕ New pricing rule</h3>
+      Name <input id="p_name"/><input id="p_item" placeholder="item (blank=all)"/>
+      <input id="p_cust" placeholder="customer (blank=all)"/><input id="p_min" type="number" placeholder="min qty" style="width:90px"/>
+      Discount% <input id="p_disc" type="number" placeholder="0" style="width:80px"/> Rate override <input id="p_rate" type="number" placeholder="blank" style="width:90px"/>
+      <button class="act" onclick="mkPrice()">Create</button></div>
+    <div class="card"><h3>🏷️ Active rules</h3>${d.length?table(['Name','Item','Cust','MinQty','Disc%','Rate'],d.map(x=>[x.name,x.item||'*',x.customer||'*',x.min_qty||'-',x.discount_pct||'-',x.rate_override||'-'])):'<p class="muted">None</p>'}</div>`);}
+  if(t==='backup'){show(`
+    <div class="card"><h3>💾 Full-tenant backup / restore</h3>
+      <p class="muted">Snapshot every row, GL, stock & audit. Keep it safe — restore replaces the live tenant.</p>
+      <button class="act" onclick="dl()">Download backup (.json)</button>
+      <div style="margin-top:10px"><input id="restoreFile" type="file"/><button class="act" onclick="ul()">Restore from file</button></div></div>`);}
+}
+const table=(h,rows)=>`<table><thead><tr>${h.map(x=>`<th>${x}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+async function mkPO(){const id=document.getElementById('sup').value.trim();if(!id)return toast('enter supplier');const r=await post('/ops/po/from-reorder',{supplier:id});toast(r.purchase_order?('PO '+r.purchase_order+' created'):(r.error||'failed'));render('reorder');}
+async function mkSub(){const b={name:'SUB '+Date.now(),customer:document.getElementById('s_cust').value.trim(),frequency:document.getElementById('s_f').value,next_date:document.getElementById('s_next').value,place_of_supply:'29',active:true,items:JSON.parse(document.getElementById('s_items').value||'[]')};if(!b.customer||!b.next_date)return toast('customer + next date required');const r=await post('/subscription',b);toast(r.id?('subscription '+r.id):(r.error||'failed'));refreshSubs();}
+async function refreshSubs(){const d=await api('/subscription');document.getElementById('sublist').innerHTML=table(['ID','Customer','Freq','Next','Active'],d.map(x=>[x.id,x.customer,x.data.frequency,x.data.next_date,x.data.active]));}
+async function runRec(){const r=await post('/ops/recurring/run',{});toast(r.created+' invoice(s) generated');refreshSubs();}
+async function mkPrice(){const b={name:document.getElementById('p_name').value.trim(),item:document.getElementById('p_item').value.trim()||undefined,customer:document.getElementById('p_cust').value.trim()||undefined,min_qty:Number(document.getElementById('p_min').value)||undefined,discount_pct:Number(document.getElementById('p_disc').value)||undefined,rate_override:document.getElementById('p_rate').value?Number(document.getElementById('p_rate').value):undefined,active:true};if(!b.name)return toast('name required');const r=await post('/pricing_rule',b);toast(r.id?('rule '+r.id):(r.error||'failed'));render('pricing');}
+async function dl(){const r=await fetch('/api/ops/backup',{headers:{'x-api-key':KEY}});const blob=await r.blob();const u=URL.createObjectURL(blob);const a=document.createElement('a');a.href=u;a.download='epic-bos-backup.json';a.click();URL.revokeObjectURL(u);}
+async function ul(){const f=document.getElementById('restoreFile').files[0];if(!f)return toast('choose a file');const db=JSON.parse(await f.text());const r=await post('/ops/restore',db);toast(r.ok?('restored '+r.rows+' rows'):(r.error||'failed'));}
+render('alerts');
+</script>
+</body>
+</html>

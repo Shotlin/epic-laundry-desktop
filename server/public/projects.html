@@ -1,0 +1,80 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS - Projects & Services</title>
+<style>
+  :root{--bg:#0b0d13;--card:#141826;--ink:#eef1f7;--muted:#8b93a7;--brand:#6d8bff;--brand2:#a06bff;--ok:#3ecf8e;--warn:#ffb454;--line:#222838}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(1200px 600px at 70% -10%,#1a2036 0%,var(--bg) 55%);color:var(--ink);min-height:100vh}
+  header{padding:14px 22px;display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--line)}
+  header a{color:var(--muted);text-decoration:none}
+  main{padding:20px;display:grid;grid-template-columns:1fr 1.2fr;gap:18px;max-width:1200px;margin:0 auto}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,0)) ,var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+  h2{margin:0 0 12px;font-size:15px}
+  label{display:block;color:var(--muted);font-size:12px;margin:8px 0 3px}
+  input,select,textarea{width:100%;background:#0c0f18;border:1px solid #2a3145;color:var(--ink);border-radius:10px;padding:9px;font-size:14px}
+  button{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border:0;border-radius:10px;padding:9px 14px;cursor:pointer;font-weight:600;margin-top:8px}
+  button.ok{background:linear-gradient(135deg,var(--ok),#2bbf7e)}button.ghost{background:#222a3c;color:var(--ink)}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--muted);font-weight:500}
+  .tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .tabs button{background:#222a3c;color:var(--muted);border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
+  .tabs button.on{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<header><a href="/ui/">- Epic BOS</a><b>Projects & Services</b></header>
+<main>
+  <div class="card">
+    <div class="tabs">
+      <button class="on" onclick="show('prj',this)">Project</button>
+      <button onclick="show('ts',this)">Timesheet</button>
+      <button onclick="show('bill',this)">Bill</button>
+    </div>
+    <div id="prj">
+      <label>Project name</label><input id="p-name"/>
+      <label>Customer</label><select id="p-cust"></select>
+      <label>Billing type</label><select id="p-bill"><option>Fixed</option><option>Time & Material</option></select>
+      <label>Estimated cost</label><input id="p-cost" type="number"/>
+      <label>Status</label><select id="p-status"><option>Planning</option><option>In Progress</option><option>On Hold</option><option>Completed</option><option>Cancelled</option></select>
+      <button class="ok" onclick="savePrj()">Save Project</button>
+    </div>
+    <div id="ts" class="hide">
+      <label>Employee</label><select id="t-emp"></select>
+      <label>Project</label><select id="t-prj"></select>
+      <label>Date</label><input id="t-date" type="date"/>
+      <label>Hours</label><input id="t-hrs" type="number"/>
+      <label>Billing rate</label><input id="t-rate" type="number"/>
+      <label>Description</label><textarea id="t-desc" rows="2"></textarea>
+      <button class="ok" onclick="saveTs()">Log Timesheet</button>
+    </div>
+    <div id="bill" class="hide">
+      <label>Project</label><select id="b-prj"></select>
+      <button class="ok" onclick="bill()">Bill unbilled timesheets -> Draft Invoice</button>
+      <div id="bill-out" style="margin-top:10px;color:var(--ok)"></div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Projects</h2>
+    <table id="pGrid"><thead><tr><th>Project</th><th>Customer</th><th>Status</th></tr></thead><tbody></tbody></table>
+    <h2 style="margin-top:14px">Recent Timesheets</h2>
+    <table id="tGrid"><thead><tr><th>TS</th><th>Emp</th><th>Project</th><th>Hrs</th><th>Billed</th></tr></thead><tbody></tbody></table>
+  </div>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+let CUST=[],EMP=[],PRJ=[];
+function show(m,btn){document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');['prj','ts','bill'].forEach(id=>document.getElementById(id).classList.toggle('hide',id!==m));}
+async function savePrj(){const r=await api('/project',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:{name:pname.value,customer:pcust.value||undefined,billing_type:pbill.value,estimated_cost:Number(pcost.value||0),status:pstatus.value}})});if(r.error){alert(r.error);return;}alert('Project '+r.data.name);loadGrids();}
+async function saveTs(){const r=await api('/timesheet',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:{employee:temp.value,project:tprj.value,date:tdate.value,hours:Number(thrs.value||0),billing_rate:Number(trate.value||0),description:tdesc.value}})});if(r.error){alert(r.error);return;}await api('/timesheet/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});alert('Timesheet '+r.data.name);loadGrids();}
+async function bill(){const r=await api('/projects/bill',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({project:bprj.value})});if(!r.ok){alert(r.error||'Billing failed');return;}billout.innerHTML=`Invoice <b>${r.invoice_name}</b> created: ${r.hours}h, INR ${r.amount} (${r.lines} lines). Submit it from Invoices.`;}
+async function init(){CUST=await api('/party');EMP=await api('/employee');PRJ=await api('/project');pcust.innerHTML='<option value="">-</option>'+CUST.filter(c=>c.data.is_customer).map(c=>`<option value="${c.id}">${c.data.name}</option>`).join('');temp.innerHTML=EMP.map(e=>`<option value="${e.id}">${e.data.name||e.data.employee_name}</option>`).join('');tprj.innerHTML=PRJ.map(p=>`<option value="${p.id}">${p.data.name}</option>`).join('');bprj.innerHTML=PRJ.map(p=>`<option value="${p.id}">${p.data.name}</option>`).join('');await loadGrids();}
+async function loadGrids(){const p=await api('/project');const g=document.querySelector('#pGrid tbody');g.innerHTML='';for(const r of p.reverse())g.insertAdjacentHTML('beforeend',`<tr><td>${r.data.name}</td><td>${(CUST.find(c=>c.id===r.data.customer)?.data?.name)||'-'}</td><td>${r.data.status}</td></tr>`);const t=await api('/timesheet');const g2=document.querySelector('#tGrid tbody');g2.innerHTML='';for(const r of t.reverse())g2.insertAdjacentHTML('beforeend',`<tr><td>${r.data.name}</td><td>${(EMP.find(e=>e.id===r.data.employee)?.data?.name||'')}</td><td>${(PRJ.find(p=>p.id===r.data.project)?.data?.name||'')}</td><td>${r.data.hours}</td><td>${r.data.billed?'yes':'no'}</td></tr>`);}
+init();
+</script>
+</body>
+</html>

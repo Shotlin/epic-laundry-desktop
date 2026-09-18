@@ -1,0 +1,69 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS - Fixed Assets</title>
+<style>
+  :root{--bg:#0b0d13;--card:#141826;--ink:#eef1f7;--muted:#8b93a7;--brand:#6d8bff;--brand2:#a06bff;--ok:#3ecf8e;--warn:#ffb454;--line:#222838}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(1200px 600px at 70% -10%,#1a2036 0%,var(--bg) 55%);color:var(--ink);min-height:100vh}
+  header{padding:14px 22px;display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--line)}
+  header a{color:var(--muted);text-decoration:none}
+  main{padding:20px;display:grid;grid-template-columns:1fr 1.2fr;gap:18px;max-width:1200px;margin:0 auto}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,0)) ,var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+  h2{margin:0 0 12px;font-size:15px}
+  label{display:block;color:var(--muted);font-size:12px;margin:8px 0 3px}
+  input,select,textarea{width:100%;background:#0c0f18;border:1px solid #2a3145;color:var(--ink);border-radius:10px;padding:9px;font-size:14px}
+  button{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border:0;border-radius:10px;padding:9px 14px;cursor:pointer;font-weight:600;margin-top:8px}
+  button.ok{background:linear-gradient(135deg,var(--ok),#2bbf7e)}button.ghost{background:#222a3c;color:var(--ink)}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--muted);font-weight:500}
+  .tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .tabs button{background:#222a3c;color:var(--muted);border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
+  .tabs button.on{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<header><a href="/ui/">- Epic BOS</a><b>Fixed Assets</b></header>
+<main>
+  <div class="card">
+    <div class="tabs">
+      <button class="on" onclick="show('reg',this)">Register</button>
+      <button onclick="show('dep',this)">Depreciate</button>
+    </div>
+    <div id="reg">
+      <label>Name</label><input id="a-name"/>
+      <label>Category</label><input id="a-cat" placeholder="e.g. Laptop, Vehicle"/>
+      <label>Purchase date</label><input id="a-date" type="date"/>
+      <label>Purchase value</label><input id="a-cost" type="number"/>
+      <label>Salvage value</label><input id="a-salv" type="number"/>
+      <label>Useful life (years)</label><input id="a-life" type="number" value="5"/>
+      <label>Method</label><select id="a-method"><option>Straight Line</option><option>Written Down Value</option></select>
+      <label>Status</label><select id="a-status"><option>In Use</option><option>Idle</option><option>Sold</option><option>Scrapped</option></select>
+      <button class="ok" onclick="saveAsset()">Add Asset</button>
+    </div>
+    <div id="dep" class="hide">
+      <label>Period (YYYY-MM)</label><input id="d-period" value="2026-07"/>
+      <button class="ok" onclick="runDep()">Run Depreciation</button>
+      <div id="dep-out" style="margin-top:10px;color:var(--ok)"></div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Asset Register</h2>
+    <table id="aGrid"><thead><tr><th>Asset</th><th>Category</th><th>Cost</th><th>Acc.Dep</th><th>Book</th><th>Status</th></tr></thead><tbody></tbody></table>
+  </div>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+function show(m,btn){document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');['reg','dep'].forEach(id=>document.getElementById(id).classList.toggle('hide',id!==m));}
+async function saveAsset(){const r=await api('/asset',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:{name:aname.value,asset_category:acat.value,purchase_date:adate.value,purchase_value:Number(acost.value||0),salvage_value:Number(asalv.value||0),useful_life:Number(alife.value||1),depreciation_method:amethod.value,status:astatus.value}})});if(r.error){alert(r.error);return;}alert('Asset '+r.data.name);loadGrids();}
+async function runDep(){const r=await api('/assets/depreciate',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({period:dperiod.value})});if(r.error){alert(r.error);return;}depout.innerHTML=`Period ${r.period}: ${r.entries.length} assets, total INR ${r.total}.`;loadGrids();}
+async function init(){await loadGrids();}
+async function loadGrids(){const a=await api('/asset');const g=document.querySelector('#aGrid tbody');g.innerHTML='';for(const r of a.reverse())g.insertAdjacentHTML('beforeend',`<tr><td>${r.data.name}</td><td>${r.data.asset_category||''}</td><td>${r.data.purchase_value}</td><td>${r.data.accumulated_depreciation||0}</td><td>${r.data.book_value??(r.data.purchase_value)}</td><td>${r.data.status}</td></tr>`);}
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS — HR & Payroll</title>
+<style>
+  :root{--bg:#0b0d13;--card:#141826;--ink:#eef1f7;--muted:#8b93a7;--brand:#6d8bff;--brand2:#a06bff;--ok:#3ecf8e;--warn:#ffb454;--line:#222838}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(1200px 600px at 70% -10%,#1a2036 0%,var(--bg) 55%);color:var(--ink);min-height:100vh}
+  header{padding:14px 22px;display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--line)}
+  header a{color:var(--muted);text-decoration:none}
+  main{padding:20px;display:grid;grid-template-columns:1fr 1.1fr;gap:18px;max-width:1200px;margin:0 auto}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,0)) ,var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+  h2{margin:0 0 12px;font-size:15px}
+  label{display:block;color:var(--muted);font-size:12px;margin:8px 0 3px}
+  input,select,textarea{width:100%;background:#0c0f18;border:1px solid #2a3145;color:var(--ink);border-radius:10px;padding:9px;font-size:14px}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  button{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border:0;border-radius:10px;padding:10px 16px;cursor:pointer;font-weight:600;margin-top:10px}
+  button.ok{background:linear-gradient(135deg,var(--ok),#2bbf7e)}button.ghost{background:#222a3c;color:var(--ink)}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--muted);font-weight:500}
+  .tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .tabs button{background:#222a3c;color:var(--muted);border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
+  .tabs button.on{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff}
+  .hide{display:none}
+  .pill{display:inline-block;background:#222a3c;border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--muted);margin:2px}
+</style>
+</head>
+<body>
+<header><a href="/ui/">← Epic BOS</a><b>👥 HR & Payroll</b></header>
+<main>
+  <div class="card">
+    <div class="tabs">
+      <button class="on" onclick="show('emp',this)">Employees</button>
+      <button onclick="show('ss',this)">Salary Structures</button>
+      <button onclick="show('run',this)">Run Payroll</button>
+      <button onclick="show('att',this)">Attendance</button>
+      <button onclick="show('leave',this)">Leave</button>
+      <button onclick="show('exp',this)">Expenses</button>
+      <button onclick="show('loan',this)">Loans</button>
+      <button onclick="show('recruit',this)">Recruitment</button>
+    </div>
+
+    <div id="emp">
+      <div class="row"><div><label>Name</label><input id="e-name"/></div><div><label>Code</label><input id="e-code"/></div></div>
+      <div class="row"><div><label>Department</label><input id="e-dept"/></div><div><label>Designation</label><input id="e-desig"/></div></div>
+      <div class="row"><div><label>Phone</label><input id="e-phone"/></div><div><label>PAN</label><input id="e-pan"/></div></div>
+      <label>Salary Structure</label><select id="e-ss"></select>
+      <label style="margin-top:8px"><input type="checkbox" id="e-active" checked style="width:auto;margin-right:6px"/>Active</label>
+      <button class="ok" onclick="addEmp()">Add Employee</button>
+    </div>
+
+    <div id="ss" class="hide">
+      <div class="row"><div><label>Name</label><input id="s-name"/></div><div><label>Basic (₹)</label><input id="s-basic" type="number"/></div></div>
+      <div class="row"><div><label>HRA</label><input id="s-hra" type="number"/></div><div><label>DA</label><input id="s-da" type="number"/></div></div>
+      <div class="row"><div><label>Other Allowances</label><input id="s-other" type="number"/></div><div><label>Professional Tax</label><input id="s-pt" type="number"/></div></div>
+      <div class="row"><div><label>PF %</label><input id="s-pf" type="number" value="12"/></div><div><label>ESI %</label><input id="s-esi" type="number" value="0.75"/></div></div>
+      <label>TDS % (leave 0 for slab estimate)</label><input id="s-tds" type="number" value="0"/>
+      <button class="ok" onclick="addSS()">Add Structure</button>
+    </div>
+
+    <div id="run" class="hide">
+      <label>Period (e.g. 2026-07)</label><input id="r-period" value="2026-07"/>
+      <div class="row"><div><label>Paid days</label><input id="r-days" type="number" value="30"/></div><div><label>Payment mode</label><select id="r-mode"><option>Bank</option><option>Cash</option><option>UPI</option></select></div></div>
+      <button class="ok" onclick="runPayroll()">Run for all active employees</button>
+      <hr style="border-color:var(--line);margin:16px 0"/>
+      <h2>Single slip (live preview)</h2>
+      <div class="row"><div><label>Employee</label><select id="r-emp" onchange="preview()"></select></div><div><label>Paid days</label><input id="r-pdays" type="number" value="30" oninput="preview()"/></div></div>
+      <div id="preview">Pick an employee to preview…</div>
+      <button class="ghost" onclick="makeSlip()">Create & Post Slip</button>
+    </div>
+
+    <div id="att" class="hide">
+      <div class="row"><div><label>Employee</label><select id="a-emp"></select></div><div><label>Date</label><input id="a-date" type="date"/></div></div>
+      <div class="row"><div><label>Status</label><select id="a-status"><option>Present</option><option>Absent</option><option>Half Day</option><option>On Leave</option><option>Holiday</option></select></div><div><label>Shift</label><input id="a-shift"/></div></div>
+      <div class="row"><div><label>In time</label><input id="a-in" type="time"/></div><div><label>Out time</label><input id="a-out" type="time"/></div></div>
+      <label>Hours</label><input id="a-hours" type="number" step="0.5" placeholder="auto-calculated"/>
+      <button class="ok" onclick="markAtt()">Mark Attendance</button>
+      <hr style="border-color:var(--line);margin:16px 0"/>
+      <h2>Attendance Summary</h2>
+      <div class="row"><div><label>Employee</label><select id="a-sum-emp"></select></div><div><label>From</label><input id="a-sum-from" type="date"/></div><div><label>To</label><input id="a-sum-to" type="date"/></div></div>
+      <button class="ghost" onclick="loadAttSummary()">Load Summary</button>
+      <div id="a-summary" style="margin-top:10px"></div>
+    </div>
+
+    <div id="leave" class="hide">
+      <h3>Leave Types</h3>
+      <div class="row"><div><label>Name</label><input id="lt-name"/></div><div><label>Max days/year</label><input id="lt-max" type="number"/></div></div>
+      <div class="row"><div><label style="margin-top:22px"><input type="checkbox" id="lt-cf" style="width:auto;margin-right:6px"/>Carry Forward</label></div><div><label style="margin-top:22px"><input type="checkbox" id="lt-req" style="width:auto;margin-right:6px"/>Requires Approval</label></div></div>
+      <label>Color (hex)</label><input id="lt-color" placeholder="#3ecf8e"/>
+      <button class="ok" onclick="addLeaveType()">Add Leave Type</button>
+      <hr style="border-color:var(--line);margin:16px 0"/>
+      <h3>Leave Application</h3>
+      <div class="row"><div><label>Employee</label><select id="la-emp"></select></div><div><label>Leave Type</label><select id="la-type"></select></div></div>
+      <div class="row"><div><label>From</label><input id="la-from" type="date"/></div><div><label>To</label><input id="la-to" type="date"/></div></div>
+      <div class="row"><div><label>Total Days</label><input id="la-days" type="number" step="0.5"/></div></div>
+      <label>Reason</label><textarea id="la-reason" rows="2"></textarea>
+      <button class="ok" onclick="applyLeave()">Submit Leave</button>
+      <hr style="border-color:var(--line);margin:16px 0"/>
+      <h3>Leave Balances</h3>
+      <div class="row"><div><label>Employee</label><select id="lb-emp"></select></div><div><label>Fiscal Year</label><input id="lb-fy" value="2026"/></div></div>
+      <button class="ghost" onclick="loadBalances()">Load Balances</button>
+      <div id="lb-out" style="margin-top:10px"></div>
+    </div>
+
+    <div id="exp" class="hide">
+      <div class="row"><div><label>Employee</label><select id="ec-emp"></select></div><div><label>Date</label><input id="ec-date" type="date"/></div></div>
+      <div id="ec-items"></div>
+      <button class="ghost" onclick="addECItem()">+ Add Expense Item</button>
+      <button class="ok" onclick="submitEC()">Submit Expense Claim</button>
+      <hr style="border-color:var(--line);margin:16px 0"/>
+      <h3>My Claims</h3>
+      <button class="ghost" onclick="loadEC()">Reload</button>
+      <div id="ec-list" style="margin-top:10px"></div>
+    </div>
+
+    <div id="loan" class="hide">
+      <div class="row"><div><label>Employee</label><select id="ln-emp"></select></div><div><label>Loan Type</label><select id="ln-type"><option>Salary Advance</option><option>Personal Loan</option><option>Vehicle Loan</option><option>Housing Loan</option><option>Other</option></select></div></div>
+      <div class="row"><div><label>Principal (₹)</label><input id="ln-principal" type="number"/></div><div><label>Interest Rate %</label><input id="ln-rate" type="number" step="0.1"/></div></div>
+      <div class="row"><div><label>Tenure (months)</label><input id="ln-tenure" type="number"/></div><div><label>Start Date</label><input id="ln-start" type="date"/></div></div>
+      <div class="row"><div><label>Repayment Mode</label><select id="ln-mode"><option>Salary Deduction</option><option>Cash</option><option>Bank Transfer</option></select></div></div>
+      <button class="ok" onclick="createLoan()">Create Loan</button>
+      <hr style="border-color:var(--line);margin:16px 0"/>
+      <h3>Loan Schedule</h3>
+      <div class="row"><div><label>Loan ID</label><input id="ln-id"/></div></div>
+      <button class="ghost" onclick="loadSchedule()">Load Schedule</button>
+      <div id="ln-schedule" style="margin-top:10px"></div>
+    </div>
+
+    <div id="recruit" class="hide">
+      <h3>Job Openings</h3>
+      <div class="row"><div><label>Title</label><input id="jo-title"/></div><div><label>Department</label><input id="jo-dept"/></div></div>
+      <div class="row"><div><label>Designation</label><input id="jo-desig"/></div><div><label>Employment Type</label><select id="jo-emp-type"><option>Full-time</option><option>Part-time</option><option>Contract</option><option>Internship</option></select></div></div>
+      <label>Description</label><textarea id="jo-desc" rows="2"></textarea>
+      <label>Requirements</label><textarea id="jo-req" rows="2"></textarea>
+      <div class="row"><div><label>Min Exp (yrs)</label><input id="jo-min-exp" type="number" step="0.5"/></div><div><label>Max Exp (yrs)</label><input id="jo-max-exp" type="number" step="0.5"/></div></div>
+      <div class="row"><div><label>Salary Min</label><input id="jo-sal-min" type="number"/></div><div><label>Salary Max</label><input id="jo-sal-max" type="number"/></div></div>
+      <button class="ok" onclick="createJO()">Create Opening</button>
+      <hr style="border-color:var(--line);margin:16px 0"/>
+      <h3>Applicants</h3>
+      <div class="row"><div><label>Job Opening</label><select id="ja-jo"></select></div></div>
+      <div class="row"><div><label>Name</label><input id="ja-name"/></div><div><label>Email</label><input id="ja-email" type="email"/></div></div>
+      <div class="row"><div><label>Phone</label><input id="ja-phone"/></div><div><label>Exp (yrs)</label><input id="ja-exp" type="number" step="0.5"/></div></div>
+      <div class="row"><div><label>Current CTC</label><input id="ja-ctc" type="number"/></div><div><label>Expected CTC</label><input id="ja-expctc" type="number"/></div></div>
+      <label>Resume / Notes</label><textarea id="ja-resume" rows="2"></textarea>
+      <button class="ok" onclick="applyJob()">Apply</button>
+      <hr style="border-color:var(--line);margin:16px 0"/>
+      <h3>Pipeline</h3>
+      <button class="ghost" onclick="loadPipeline()">Reload Pipeline</button>
+      <div id="pipe-out" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Employees</h2>
+    <table id="grid"><thead><tr><th>Code</th><th>Name</th><th>Dept</th><th>Structure</th></tr></thead><tbody></tbody></table>
+    <h2 style="margin-top:16px">Salary Slips</h2>
+    <table id="slips"><thead><tr><th>Slip</th><th>Emp</th><th>Period</th><th>Gross</th><th>Net</th></tr></thead><tbody></tbody></table>
+    <h2 style="margin-top:16px">Attendance Records</h2>
+    <table id="att-grid"><thead><tr><th>Date</th><th>Emp</th><th>Status</th><th>Hours</th></tr></thead><tbody></tbody></table>
+    <h2 style="margin-top:16px">Leave Applications</h2>
+    <table id="leave-grid"><thead><tr><th>Ref</th><th>Emp</th><th>Type</th><th>From</th><th>To</th><th>Days</th><th>Status</th></tr></thead><tbody></tbody></table>
+    <h2 style="margin-top:16px">Expense Claims</h2>
+    <table id="exp-grid"><thead><tr><th>Ref</th><th>Emp</th><th>Date</th><th>Amount</th><th>Status</th></tr></thead><tbody></tbody></table>
+    <h2 style="margin-top:16px">Employee Loans</h2>
+    <table id="loan-grid"><thead><tr><th>Ref</th><th>Emp</th><th>Type</th><th>Principal</th><th>EMI</th><th>Status</th></tr></thead><tbody></tbody></table>
+    <h2 style="margin-top:16px">Job Openings</h2>
+    <table id="jo-grid"><thead><tr><th>Ref</th><th>Title</th><th>Dept</th><th>Type</th><th>Status</th></tr></thead><tbody></tbody></table>
+  </div>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+let SS=[],EMP=[],LTS=[],JOS=[];
+function show(m,btn){document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');['emp','ss','run','att','leave','exp','loan','recruit'].forEach(id=>document.getElementById(id).classList.toggle('hide',id!==m));
+  if(m==='att'){loadEmpDD('a-emp');loadEmpDD('a-sum-emp');}
+  if(m==='leave'){loadEmpDD('la-emp');loadEmpDD('lb-emp');loadLeaveTypes();}
+  if(m==='exp'){loadEmpDD('ec-emp');addECItem();}
+  if(m==='loan'){loadEmpDD('ln-emp');}
+  if(m==='recruit'){loadJO();}
+}
+function loadEmpDD(sel){const s=document.getElementById(sel);if(!s)return;s.innerHTML='<option value="">— select —</option>'+EMP.filter(e=>e.data.is_active).map(e=>`<option value="${e.id}">${e.data.name}</option>`).join('');}
+async function load(){
+  SS=await api('/salary_structure');EMP=await api('/employee');LTS=await api('/leave_type');JOS=await api('/job_opening');
+  ess.innerHTML=SS.map(s=>`<option value="${s.id}">${s.data.name} (₹${s.data.basic})</option>`).join('');
+  loadEmpDD('a-emp');loadEmpDD('la-emp');loadEmpDD('lb-emp');loadEmpDD('ec-emp');loadEmpDD('ln-emp');
+  const tb=document.querySelector('#grid tbody');tb.innerHTML='';
+  for(const e of EMP){const tr=document.createElement('tr');tr.innerHTML=`<td>${e.data.employee_code||''}</td><td>${e.data.name}</td><td>${e.data.department||''}</td><td>${(SS.find(s=>s.id===e.data.salary_structure)?.data?.name)||'—'}</td>`;tb.appendChild(tr);}
+  await loadSlips();await loadAttGrid();await loadLeaveGrid();await loadExpGrid();await loadLoanGrid();await loadJOGrid();
+}
+async function loadSlips(){
+  const sl=await api('/salary_slip');const tb=document.querySelector('#slips tbody');tb.innerHTML='';
+  for(const r of sl.reverse()){const tr=document.createElement('tr');tr.innerHTML=`<td>${r.name}</td><td>${r.data.employee}</td><td>${r.data.period}</td><td>₹${r.data.gross||''}</td><td>₹${r.data.net_pay||''}</td>`;tb.appendChild(tr);}
+}
+async function addEmp(){const body={name:ename.value,employee_code:ecode.value,department:edept.value,designation:edesig.value,phone:ephone.value,pan:epan.value,salary_structure:ess.value,is_active:eactive.checked};const r=await api('/employee',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});if(r.error){alert(r.error);return;}alert('Added '+r.name);load();}
+async function addSS(){const body={name:sname.value,basic:Number(sbasic.value),hra:Number(shra.value||0),da:Number(sda.value||0),other_allowances:Number(sother.value||0),professional_tax:Number(spt.value||0),pf_pct:Number(spf.value||0),esi_pct:Number(sesi.value||0),tds_pct:Number(stds.value||0)};const r=await api('/salary_structure',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});if(r.error){alert(r.error);return;}alert('Added '+r.name);load();}
+async function runPayroll(){const r=await api('/payroll/run',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({period:rperiod.value,paid_days:Number(rdays.value||30),payment_mode:rmode.value})});if(r.error){alert(r.error);return;}alert('Generated '+r.generated+' slips');loadSlips();}
+async function preview(){if(!remp.value){preview.textContent='Pick an employee to preview…';return;}const p=await api('/payroll/preview?employee='+remp.value+'&paid_days='+(rpdays.value||30));if(p.error){preview.textContent=p.error;return;}preview.innerHTML=`<b>Gross ₹${p.gross}</b>  (proRate ${p.proRate})<br>Earnings: Basic ₹${p.earnings.basic}, HRA ₹${p.earnings.hra}, DA ₹${p.earnings.da}, Other ₹${p.earnings.other_allowances}<br>Deductions: PF ₹${p.deductions.pf}, ESI ₹${p.deductions.esi}, TDS ₹${p.deductions.tds}, PT ₹${p.deductions.pt}<br><b style="color:var(--ok)">Net Pay ₹${p.net_pay}</b>`;}
+async function makeSlip(){if(!remp.value){alert('Pick an employee');return;}const r=await api('/salary_slip',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:{employee:remp.value,period:rperiod.value,paid_days:Number(rpdays.value||30),payment_mode:rmode.value}}) });if(r.error){alert(r.error);return;}await api('/salary_slip/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});alert('Posted '+r.name);loadSlips();}
+function fillRunEmp(){remp.innerHTML='<option value="">— select —</option>'+EMP.filter(e=>e.data.is_active&&e.data.salary_structure).map(e=>`<option value="${e.id}">${e.data.name}</option>`).join('');}
+
+// ---- Attendance ----
+async function markAtt(){const body={employee:aemp.value,date:adate.value,status:astatus.value,shift:ashift.value,in_time:ain.value,out_time:aout.value,working_hours:Number(ahours.value||0)};const r=await api('/attendance',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});if(r.error){alert(r.error);return;}alert('Attendance marked');loadAttGrid();}
+async function loadAttGrid(){const recs=await api('/attendance');const tb=document.querySelector('#att-grid tbody');tb.innerHTML='';for(const r of recs.reverse()){const tr=document.createElement('tr');tr.innerHTML=`<td>${r.data.date}</td><td>${r.data.employee}</td><td>${r.data.status}</td><td>${r.data.working_hours||''}</td>`;tb.appendChild(tr);}
+async function loadAttSummary(){const s=await api('/hr/attendance-summary?employee='+asumemp.value+'&from='+asumfrom.value+'&to='+asumto.value);asummary.innerHTML='<b>Present:</b> '+s.present+' <b>Absent:</b> '+s.absent+' <b>Half Day:</b> '+s.halfDay+' <b>On Leave:</b> '+s.onLeave+' <b>Holiday:</b> '+s.holiday+' <b>Total Hours:</b> '+s.totalHours;}
+
+// ---- Leave ----
+async function addLeaveType(){const body={name:ltname.value,max_days_per_year:Number(ltmax.value||0),is_carry_forward:ltcf.checked,requires_approval:ltreq.checked,color:ltcolor.value};const r=await api('/leave_type',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});if(r.error){alert(r.error);return;}alert('Added '+r.name);loadLeaveTypes();}
+async function loadLeaveTypes(){LTS=await api('/leave_type');latype.innerHTML=LTS.map(t=>`<option value="${t.id}">${t.data.name}</option>`).join('');}
+async function applyLeave(){const body={employee:laemp.value,leave_type:latype.value,from_date:lafrom.value,to_date:lato.value,total_days:Number(ladays.value||0),reason:lareason.value};const r=await api('/leave_application',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});if(r.error){alert(r.error);return;}alert('Leave submitted '+r.name);loadLeaveGrid();}
+async function loadLeaveGrid(){const recs=await api('/leave_application');const tb=document.querySelector('#leave-grid tbody');tb.innerHTML='';for(const r of recs.reverse()){const tr=document.createElement('tr');const lt=LTS.find(t=>t.id===r.data.leave_type);tr.innerHTML=`<td>${r.name}</td><td>${r.data.employee}</td><td>${lt?.data?.name||''}</td><td>${r.data.from_date}</td><td>${r.data.to_date}</td><td>${r.data.total_days}</td><td>${r.data.status}</td>`;tb.appendChild(tr);}
+async function loadBalances(){const bal=await api('/hr/leave-balances?employee='+lbemp.value+'&fiscal_year='+lbfy.value);lbout.innerHTML='';for(const b of bal){lbout.innerHTML+=`<div class="pill">${b.leaveTypeName}: entitled ${b.entitled_days}, carried ${b.carried_forward}, availed ${b.availed_days}, <b>balance ${b.balance_days}</b></div>`;}}
+
+// ---- Expense Claims ----
+function addECItem(){document.getElementById('ec-items').insertAdjacentHTML('beforeend',`<div class="row" style="margin-top:6px"><div><label>Date</label><input type="date" class="ec-date" value="${new Date().toISOString().slice(0,10)}"/></div><div><label>Category</label><select class="ec-cat"><option>Travel</option><option>Meals</option><option>Lodging</option><option>Office Supplies</option><option>Client Entertainment</option><option>Training</option><option>Other</option></select></div></div><div class="row" style="margin-top:6px"><div><label>Description</label><input class="ec-desc"/></div><div><label>Amount</label><input class="ec-amt" type="number" step="0.01"/></div></div><label style="margin-top:4px"><input type="checkbox" class="ec-receipt" style="width:auto;margin-right:6px"/>Receipt attached</label>`);}
+async function submitEC(){const items=[...document.querySelectorAll('#ec-items > div.row')].map((r,i)=>{const d=r.querySelector('.ec-date').value;const c=r.querySelector('.ec-cat').value;const desc=r.querySelector('.ec-desc').value;const a=Number(r.querySelector('.ec-amt').value||0);const rc=r.querySelector('.ec-receipt').checked;return {date:d,category:c,description:desc,amount:a,currency:'INR',receipt_attached:rc};}).filter(x=>x.date&&x.category&&x.amount>0);if(!items.length){alert('Add at least one item');return;}const body={employee:ecemp.value,posting_date:new Date().toISOString().slice(0,10),items};const r=await api('/expense_claim',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});if(r.error){alert(r.error);return;}alert('Expense claim '+r.name+' submitted (₹'+r.data.total_amount+')');loadEC();}
+async function loadEC(){const recs=await api('/expense_claim');const el=document.getElementById('ec-list');el.innerHTML='';for(const r of recs.reverse()){el.innerHTML+=`<div class="pill">${r.name}: ₹${r.data.total_amount} - ${r.data.status}</div>`;}}
+
+// ---- Loans ----
+async function createLoan(){const body={employee:lnemp.value,loan_type:lntype.value,principal_amount:Number(lnprincipal.value),interest_rate:Number(lnrate.value||0),tenure_months:Number(lntenure.value),start_date:lnstart.value,repayment_mode:lnmode.value};const r=await api('/employee_loan',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});if(r.error){alert(r.error);return;}alert('Loan '+r.name+' created (EMI ₹'+r.data.emi_amount+')');loadLoanGrid();}
+async function loadSchedule(){const sch=await api('/hr/loan-schedule?id='+lnid.value);lnschedule.innerHTML='';for(const s of sch){lnschedule.innerHTML+=`<div class="pill">Month ${s.month}: EMI ₹${s.emi}, Principal ₹${s.principal}, Interest ₹${s.interest}, Balance ₹${s.balance}</div>`;}}
+async function loadLoanGrid(){const recs=await api('/employee_loan');const tb=document.querySelector('#loan-grid tbody');tb.innerHTML='';for(const r of recs.reverse()){const tr=document.createElement('tr');tr.innerHTML=`<td>${r.name}</td><td>${r.data.employee}</td><td>${r.data.loan_type}</td><td>₹${r.data.principal_amount}</td><td>₹${r.data.emi_amount}</td><td>${r.data.status}</td>`;tb.appendChild(tr);}}
+
+// ---- Recruitment ----
+async function loadJO(){JOS=await api('/job_opening');jojo.innerHTML=JOS.map(j=>`<option value="${j.id}">${j.data.title} (${j.data.department||''})</option>`).join('');loadJOGrid();}
+async function createJO(){const body={title:jotitle.value,department:jodept.value,designation:jodesig.value,description:jodesc.value,requirements:joreq.value,employment_type:joemptype.value,min_experience:Number(jominexp.value||0),max_experience:Number(jomaxexp.value||0),salary_min:Number(josalmin.value||0),salary_max:Number(josalmax.value||0),status:'Open',opened_on:new Date().toISOString().slice(0,10)};const r=await api('/job_opening',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});if(r.error){alert(r.error);return;}alert('Job opening '+r.name+' created');loadJO();}
+async function applyJob(){const body={job_opening:jajo.value,applicant_name:janame.value,email:jaemail.value,phone:japone.value,experience_years:Number(jaexp.value||0),current_ctc:Number(jactc.value||0),expected_ctc:Number(jaexpctc.value||0),resume:jaresume.value};const r=await api('/job_applicant',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});if(r.error){alert(r.error);return;}alert('Application '+r.name+' submitted');loadPipeline();}
+async function loadPipeline(){const pipe=await api('/hr/recruitment-pipeline');pipeout.innerHTML='';for(const st of pipe){pipeout.innerHTML+=`<div class="pill">${st.stage}: ${st.count} applicants</div>`;}}
+async function loadJOGrid(){const recs=await api('/job_opening');const tb=document.querySelector('#jo-grid tbody');tb.innerHTML='';for(const r of recs.reverse()){const tr=document.createElement('tr');tr.innerHTML=`<td>${r.name}</td><td>${r.data.title}</td><td>${r.data.department||''}</td><td>${r.data.employment_type||''}</td><td>${r.data.status}</td>`;tb.appendChild(tr);}}
+load();
+</script>
+</body>
+</html>

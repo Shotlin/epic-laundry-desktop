@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS — GST & Compliance</title>
+<style>
+  :root{--bg:#0f1117;--card:#1a1d27;--ink:#e7e9ee;--muted:#9aa1b2;--brand:#5b8cff;--ok:#3ecf8e;--warn:#ffb454}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{padding:16px 24px;display:flex;gap:12px;align-items:center;border-bottom:1px solid #232735}
+  header a{color:var(--muted);text-decoration:none}
+  main{padding:24px;display:grid;grid-template-columns:1fr;gap:20px}
+  .card{background:var(--card);border:1px solid #232735;border-radius:12px;padding:16px}
+  h2{margin:0 0 12px;font-size:15px}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid #232735;font-size:13px}
+  button{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:7px 12px;cursor:pointer;margin:2px}
+  button.ok{background:var(--ok)}button.warn{background:var(--warn);color:#222}button.ghost{background:#2a2f3d}
+  .pill{background:#232735;border-radius:20px;padding:2px 8px;font-size:11px;color:var(--muted)}
+  .tot{font-size:20px;font-weight:700}
+  pre{background:#0f1117;padding:12px;border-radius:8px;overflow:auto;max-height:240px}
+</style>
+</head>
+<body>
+<header><a href="/ui/">← Epic BOS</a><b>🏛️ GST & Compliance</b></header>
+<main>
+  <div class="card">
+    <h2>Compliance Cockpit</h2>
+    <div id="cockpit"></div>
+  </div>
+  <div class="card">
+    <h2>E-Invoice (IRN) & E-Way Bills</h2>
+    <table id="grid"><thead><tr><th>No</th><th>Total</th><th>IRN</th><th>E-Way</th><th></th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="card">
+    <h2>IMS — Inward Supplies (2A / 2B matching)</h2>
+    <table id="ims"><thead><tr><th>Doc</th><th>Supplier</th><th>Taxable</th><th>Tax</th><th>Status</th><th></th></tr></thead><tbody></tbody></table>
+  </div>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+async function load(){
+  const c=await api('/gst/cockpit');
+  document.getElementById('cockpit').innerHTML=
+    `<div class="tot">Output GST: ₹${c.outputTax.total.toLocaleString('en-IN')}</div>`+
+    `<div style="color:var(--muted)">Period invoices: ${c.periodInvoices} · Taxable: ₹${c.taxable.toLocaleString('en-IN')} · `+
+    `CGST ₹${c.outputTax.cgst} / SGST ₹${c.outputTax.sgst} / IGST ₹${c.outputTax.igst}</div>`+
+    `<div style="color:var(--muted);font-size:12px;margin-top:6px">GSTR-1 due ${c.nextGstr1Due} · GSTR-3B due ${c.nextGstr3bDue} · ${c.thresholdNote}</div>`;
+  const inv=await api('/sales_invoice');
+  const tb=document.querySelector('#grid tbody');tb.innerHTML='';
+  for(const r of inv.filter(r=>r.status==='Submitted').reverse()){
+    const irn=r.einvoice_status==='GENERATED'?'✅ '+r.name:'—';
+    const ew=r.__eway?'✅ '+r.__eway.ewbNo:'—';
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${r.name}</td><td>₹${r.grand_total}</td><td>${irn}</td><td>${ew}</td>`+
+      `<td><button onclick="irn('${r.id}')" class="ghost">IRN</button><button onclick="eway('${r.id}')" class="ghost">E-Way</button></td>`;
+    tb.appendChild(tr);
+  }
+  const ims=await api('/gst/ims');
+  const it=document.querySelector('#ims tbody');it.innerHTML='';
+  for(const s of ims.supplies){
+    const tr=document.createElement('tr');
+    const col=s.status==='ACCEPTED'?'ok':s.status==='REJECTED'?'warn':''; 
+    tr.innerHTML=`<td>${s.docNo}</td><td>${s.supplierName}</td><td>₹${s.taxable}</td><td>₹${(s.cgst+s.sgst+s.igst).toFixed(2)}</td>`+
+      `<td><span class="pill ${col}">${s.status}</span></td>`+
+      `<td><button class="ok" onclick="act('${s.irn}','ACC')">Accept</button><button class="warn" onclick="act('${s.irn}','REJ')">Reject</button></td>`;
+    it.appendChild(tr);
+  }
+}
+async function irn(id){const r=await api('/gst/irn/'+id,{method:'POST',headers:{'x-api-key':KEY}});alert(r.irn?('IRN: '+r.irn):JSON.stringify(r));load();}
+async function eway(id){const r=await api('/gst/eway/'+id,{method:'POST',headers:{'x-api-key':KEY},body:JSON.stringify({transporter:{name:'Self'}})});alert(r.ewbNo?('EWB: '+r.ewbNo):JSON.stringify(r));load();}
+async function act(irn,action){const r=await api('/gst/ims/action',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({irn,action})});load();}
+load();
+</script>
+</body>
+</html>

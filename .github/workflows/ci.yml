@@ -1,0 +1,159 @@
+name: Epic Laundry CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            webapp/package-lock.json
+            desktop/package-lock.json
+      - name: Install server dependencies
+        run: npm ci
+        working-directory: server
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+        working-directory: server
+      - name: Generate server SBOM
+        run: npm sbom --omit=dev --sbom-format=cyclonedx > server-sbom.json
+        working-directory: server
+      - name: Upload server SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: epic-laundry-server-sbom
+          path: server/server-sbom.json
+      - name: Typecheck server
+        run: npm run typecheck
+        working-directory: server
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: webapp
+      - name: Build web application for server static and asset gates
+        run: npm run build
+        working-directory: webapp
+      - name: Run full server regression and V3 tagging gates
+        run: >-
+          npm run test:laundry && npm run test:auth && npm run test:store-migration && npm run test:clean-db-bootstrap &&
+          npm run test:customer && npm run test:package && npm run test:catalogue &&
+          npm run test:invoice-snapshot &&
+          npm run test:payment && npm run test:ops && npm run test:restart &&
+          npm run test:recovery-drill && npm run test:workspace-mode &&
+          npm run test:startup-handshake && npm run test:garment-traceability &&
+          npm run test:garment-backfill && npm run test:money && npm run test:reconciliation &&
+          npm run test:cash-shift && npm run test:routes && npm run test:hardware &&
+          npm run test:diagnostics && npm run test:backup-crypto &&
+          npm run test:financial-normalization && npm run test:entity-normalization &&
+          npm run test:canonical-tax && npm run test:statutory && npm run test:tax-policy &&
+          npm run test:marketplace-sync && npm run test:marketplace-cross-channel &&
+          npm run test:marketplace-api && npm run test:marketplace-device-api &&
+          npm run test:marketplace-catalogue && npm run test:marketplace-customer-links &&
+          npm run test:marketplace-order-truth && npm run test:marketplace-customer-status &&
+          npm run test:marketplace-pickup && npm run test:marketplace-settlement &&
+          npm run test:marketplace-settlement-batches && npm run test:marketplace-cash &&
+          npm run test:provider-events && npm run test:provider-events-api &&
+          npm run test:marketplace-notifications && npm run test:marketplace-notifications-api &&
+          npm run test:customer-privacy && npm run test:customer-privacy-api &&
+          npm run test:customer-portal && npm run test:garment-assets && npm run test:order-search &&
+          npm run test:e2e
+        working-directory: server
+      - name: Audit web production dependencies
+        run: npm audit --omit=dev --audit-level=high
+        working-directory: webapp
+      - name: Generate web SBOM
+        run: npm sbom --omit=dev --sbom-format=cyclonedx > webapp-sbom.json
+        working-directory: webapp
+      - name: Upload web SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: epic-laundry-web-sbom
+          path: webapp/webapp-sbom.json
+      - name: Run static accessibility audit
+        run: npm run audit:a11y
+        working-directory: webapp
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: webapp
+      - name: Run frontend interaction smoke test
+        run: npm run test:e2e
+        working-directory: webapp
+      - name: Run fresh-production empty-state walkthrough
+        run: npm run test:e2e:empty
+        working-directory: webapp
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: desktop
+      - name: Audit desktop production dependencies
+        run: npm audit --omit=dev --audit-level=high
+        working-directory: desktop
+      - name: Generate desktop SBOM
+        run: npm sbom --omit=dev --sbom-format=cyclonedx > desktop-sbom.json
+        working-directory: desktop
+      - name: Upload desktop SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: epic-laundry-desktop-sbom
+          path: desktop/desktop-sbom.json
+      - name: Verify desktop workspace isolation
+        run: npm run test:workspace
+        working-directory: desktop
+      - name: Verify desktop restore safety policy
+        run: npm run test:recovery-policy
+        working-directory: desktop
+      - name: Verify release signature implementation
+        run: npm run test:release-signature
+        working-directory: desktop
+
+  windows-desktop:
+    # Internal CI artifacts are intentionally unsigned. Production signing is a protected-release concern.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            webapp/package-lock.json
+            desktop/package-lock.json
+      - name: Install server dependencies
+        run: npm ci
+        working-directory: server
+      - name: Verify clean server bootstrap and authenticated startup
+        run: npm run test:clean-db-bootstrap && npm run test:startup-handshake
+        working-directory: server
+      - name: Build server
+        run: npm run build
+        working-directory: server
+      - name: Install and build web application
+        run: npm ci && npm run build
+        working-directory: webapp
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: desktop
+      - name: Verify desktop recovery and release controls
+        run: npm run test:workspace && npm run test:recovery-policy && npm run test:release-signature
+        working-directory: desktop
+      - name: Package unsigned Windows internal-build installer
+        run: npm run dist:win
+        working-directory: desktop
+      - name: Upload unsigned Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: epic-laundry-windows-unsigned
+          path: desktop/dist/*

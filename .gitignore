@@ -1,0 +1,42 @@
+# deps
+node_modules/
+.pnp/
+.yarn/
+
+# build output
+server/dist/
+desktop/dist/
+desktop/dist-fresh/
+desktop/dist-*/
+*.tsbuildinfo
+
+# runtime data (per-tenant JSON snapshots)
+server/data/
+desktop/*.local.json
+epic.json
+demo-runtime/
+
+# test output
+/test-results/
+/webapp/test-results/
+
+# Web build output is emitted into the server's local static directory. It is
+# reproducibly built from webapp/ for Docker and Electron packages; source assets
+# live only under webapp/public.
+/server/public/app/
+
+# logs
+*.log
+npm-debug.log*
+
+# electron-builder caches
+electron-builder-cache/
+
+# misc
+.DS_Store
+*.exe
+.aider*
+
+# Local reference and integration checkouts (independent repositories)
+_bakaloo_ref/
+shotlinXchat/

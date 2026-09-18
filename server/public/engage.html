@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS — Engagement</title>
+<style>
+  :root{--bg:#0b0d13;--card:#141826;--ink:#eef1f7;--muted:#8b93a7;--brand:#6d8bff;--brand2:#a06bff;--ok:#3ecf8e;--warn:#ffb454;--bad:#ff6b6b;--line:#222838}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(1200px 600px at 70% -10%,#1a2036 0%,var(--bg) 55%);color:var(--ink);min-height:100vh}
+  header{padding:14px 22px;display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--line)}
+  header a{color:var(--muted);text-decoration:none}
+  .tabs{display:flex;gap:6px;padding:12px 22px 0;flex-wrap:wrap;max-width:1200px;margin:0 auto}
+  .tabs button{background:#222a3c;color:var(--muted);border:1px solid var(--line);border-radius:10px 10px 0 0;padding:8px 14px;cursor:pointer;font-weight:600;margin:0}
+  .tabs button.active{background:var(--card);color:var(--ink);border-bottom-color:var(--card)}
+  main{padding:16px 22px;max-width:1200px;margin:0 auto}
+  section{display:none}
+  .grid2{display:grid;grid-template-columns:1fr 1.2fr;gap:18px}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,0)),var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:16px}
+  h2{margin:0 0 12px;font-size:15px}
+  label{display:block;color:var(--muted);font-size:12px;margin:8px 0 3px}
+  input,select,textarea{width:100%;background:#0c0f18;border:1px solid #2a3145;color:var(--ink);border-radius:10px;padding:9px;font-size:14px}
+  button{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border:0;border-radius:10px;padding:9px 14px;cursor:pointer;font-weight:600;margin-top:8px}
+  button.ok{background:linear-gradient(135deg,var(--ok),#2bbf7e)}button.ghost{background:#222a3c;color:var(--ink)}button.warn{background:linear-gradient(135deg,var(--warn),#ff9d3c);color:#1a1206}
+  button.sm{padding:5px 10px;font-size:12px;margin:0}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--muted);font-weight:500}
+  .pill{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 10px;font-size:12px;color:var(--muted)}
+  .pill.info{color:#8ab4ff;border-color:#2a3a5a}.pill.warning{color:var(--warn);border-color:#5a4620}.pill.critical{color:var(--bad);border-color:#5a2626}.pill.success{color:var(--ok);border-color:#265a3e}
+  .ntf{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px;display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+  .ntf.unread{border-left:3px solid var(--brand)}
+  .ntf b{display:block}.ntf small{color:var(--muted)}
+  .muted{color:var(--muted)}
+  .stat{display:flex;gap:20px;flex-wrap:wrap}.stat div b{display:block;font-size:22px}.stat div span{color:var(--muted);font-size:12px}
+  .hint{font-size:11px;color:var(--muted);margin-top:4px}
+</style>
+</head>
+<body>
+<header><a href="/ui/">← Epic BOS</a><b>💬 Engagement</b> <span class="muted">Customer 360 · Templates · Campaigns · Notifications</span></header>
+<div class="tabs">
+  <button data-t="c360" class="active" onclick="tab('c360')">Customer 360</button>
+  <button data-t="templates" onclick="tab('templates')">Templates</button>
+  <button data-t="campaigns" onclick="tab('campaigns')">Campaigns</button>
+  <button data-t="inbox" onclick="tab('inbox')">Notifications <span id="nbadge" class="pill critical" style="display:none"></span></button>
+</div>
+<main>
+  <!-- CUSTOMER 360 -->
+  <section id="tab-c360">
+    <div class="grid2">
+      <div class="card">
+        <h2>Customers</h2>
+        <select id="cust" onchange="selectCustomer()" style="margin-bottom:10px"></select>
+        <div id="c360"></div>
+        <h2 style="margin-top:14px">Support Tickets</h2>
+        <div id="tickets"></div>
+        <label>New ticket subject</label><input id="t-subj"/>
+        <label>Description</label><textarea id="t-desc" rows="2"></textarea>
+        <button class="ghost" onclick="addTicket()">Open Ticket</button>
+      </div>
+      <div class="card">
+        <h2>Outstanding Invoices</h2>
+        <table id="inv"><thead><tr><th>Invoice</th><th>Total</th><th>Paid</th><th>Balance</th></tr></thead><tbody></tbody></table>
+        <h2 style="margin-top:14px">Send a message</h2>
+        <label>Channel</label>
+        <select id="s-channel"><option>WhatsApp</option><option>Email</option><option>SMS</option></select>
+        <label>Use template (optional)</label><select id="s-tmpl"><option value="">— free text —</option></select>
+        <label>Message</label><textarea id="s-msg" rows="3" placeholder="Hello {{name}}, ..."></textarea>
+        <button class="warn" onclick="sendOne()">Send</button>
+        <button class="ghost sm" onclick="reminder()">Payment reminder</button>
+        <div id="wa" class="hint"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TEMPLATES -->
+  <section id="tab-templates">
+    <div class="grid2">
+      <div class="card">
+        <h2>New message template</h2>
+        <label>Name</label><input id="tpl-name" placeholder="Diwali greeting"/>
+        <label>Channel</label><select id="tpl-channel"><option>WhatsApp</option><option>Email</option><option>SMS</option></select>
+        <label>Category</label><select id="tpl-cat"><option>Marketing</option><option>Transactional</option><option>Reminder</option><option>Festival</option><option>Utility</option></select>
+        <label>Language</label><select id="tpl-lang"><option>English</option><option>Hindi</option><option>Hinglish</option><option>Tamil</option><option>Telugu</option><option>Kannada</option><option>Marathi</option><option>Bengali</option><option>Gujarati</option></select>
+        <label>Subject (Email only)</label><input id="tpl-subject"/>
+        <label>Body</label><textarea id="tpl-body" rows="4" placeholder="Namaste {{name}}, ..."></textarea>
+        <div class="hint">Merge fields: {{name}} {{org}} {{phone}} {{email}} {{gstin}}</div>
+        <button onclick="saveTemplate()">Save Template</button>
+      </div>
+      <div class="card">
+        <h2>Templates</h2>
+        <div id="tpl-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CAMPAIGNS -->
+  <section id="tab-campaigns">
+    <div class="grid2">
+      <div class="card">
+        <h2>Run a campaign</h2>
+        <label>Campaign</label>
+        <select id="cmp-sel"></select>
+        <label>New campaign name</label>
+        <div style="display:flex;gap:8px"><input id="cmp-name" placeholder="Diwali Dhamaka"/><button class="ghost sm" onclick="newCampaign()">Add</button></div>
+        <label>Template</label><select id="cmp-tmpl"></select>
+        <label>Audience</label>
+        <select id="cmp-aud"><option value="all_customers">All customers</option><option value="consented">Consented customers only</option><option value="leads">Open leads</option></select>
+        <button class="ok" onclick="runCampaign()">Send Campaign</button>
+        <div id="cmp-out" class="hint"></div>
+      </div>
+      <div class="card">
+        <h2>Campaign performance</h2>
+        <div id="cmp-stat" class="stat"></div>
+        <div id="cmp-touches" style="margin-top:12px"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- NOTIFICATIONS -->
+  <section id="tab-inbox">
+    <div class="card">
+      <h2 style="display:flex;justify-content:space-between">Notification Center
+        <span><button class="ghost sm" onclick="syncAlerts()">Sync business alerts</button>
+        <button class="ghost sm" onclick="readAll()">Mark all read</button></span>
+      </h2>
+      <div id="inbox"></div>
+    </div>
+  </section>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY,'Content-Type':'application/json'},...o}).then(r=>r.json());
+const money=n=>'₹'+(Math.round((Number(n)||0)*100)/100).toLocaleString('en-IN');
+let CUST=[],INV=[],PAY=[],SEL=null,TMPL=[];
+
+function tab(t){
+  document.querySelectorAll('main>section').forEach(s=>s.style.display='none');
+  document.getElementById('tab-'+t).style.display='';
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.t===t));
+  if(t==='templates')loadTemplates();
+  if(t==='campaigns')loadCampaigns();
+  if(t==='inbox')loadInbox();
+}
+
+async function init(){
+  CUST=await api('/party');INV=await api('/sales_invoice');PAY=await api('/payment_entry');TMPL=await api('/message_template');
+  const opts=CUST.filter(c=>c.is_customer||c.data?.is_customer).map(c=>`<option value="${c.id}">${c.name||c.id}</option>`).join('');
+  document.getElementById('cust').innerHTML=opts;
+  fillTemplateSelect('s-tmpl',true);
+  if(document.getElementById('cust').value)selectCustomer();
+  refreshBadge();
+}
+function fillTemplateSelect(id,blank){
+  const el=document.getElementById(id);if(!el)return;
+  el.innerHTML=(blank?'<option value="">— free text —</option>':'')+TMPL.map(t=>`<option value="${t.id}">${t.name} (${t.channel})</option>`).join('');
+}
+function paidFor(id){return PAY.filter(p=>(p.against_sales||p.data?.against_sales)===id).reduce((a,p)=>a+(Number(p.amount||p.data?.amount)||0),0);}
+
+async function selectCustomer(){
+  SEL=document.getElementById('cust').value;
+  const c=CUST.find(x=>x.id===SEL);const d=c.data||c;
+  document.getElementById('c360').innerHTML=`<span class="pill">${d.phone||'no phone'}</span> <span class="pill">${d.gstin||'no GSTIN'}</span> <span class="pill">${d.email||'no email'}</span>`;
+  const rows=INV.filter(r=>(r.customer||r.data?.customer)===SEL && (r.status==='Submitted'));
+  const tb=document.querySelector('#inv tbody');tb.innerHTML='';let totalBal=0;
+  for(const r of rows){const gt=Number(r.grand_total||r.data?.grand_total)||0;const bal=Math.max(0,gt-paidFor(r.id));totalBal+=bal;
+    const tr=document.createElement('tr');tr.innerHTML=`<td>${r.name||r.id}</td><td>${money(gt)}</td><td>${money(paidFor(r.id))}</td><td>${money(bal)}</td>`;tb.appendChild(tr);}
+  if(!rows.length)tb.innerHTML='<tr><td colspan="4" class="muted">No open invoices</td></tr>';
+  document.getElementById('wa').textContent=totalBal>0?`Outstanding: ${money(totalBal)}`:'All clear';
+  loadTickets();
+}
+async function loadTickets(){
+  if(!SEL)return;const tk=await api('/support_ticket');
+  document.getElementById('tickets').innerHTML=tk.filter(t=>(t.customer||t.data?.customer)===SEL).map(t=>`<span class="pill" style="margin:3px">[${t.status||t.data?.status}] ${t.subject||t.data?.subject}</span>`).join('')||'<span class="muted">none</span>';
+}
+async function addTicket(){
+  if(!SEL){alert('Pick a customer');return;}
+  const r=await api('/support_ticket',{method:'POST',body:JSON.stringify({data:{customer:SEL,subject:document.getElementById('t-subj').value,description:document.getElementById('t-desc').value,status:'Open',priority:'Medium'}})});
+  if(r.error){alert(r.error);return;}document.getElementById('t-subj').value='';document.getElementById('t-desc').value='';loadTickets();
+}
+async function sendOne(){
+  if(!SEL){alert('Pick a customer');return;}
+  const tmplId=document.getElementById('s-tmpl').value;
+  const body=tmplId?{templateId:tmplId,refId:SEL}:{channel:document.getElementById('s-channel').value,to:(CUST.find(x=>x.id===SEL).data||CUST.find(x=>x.id===SEL)).phone,message:document.getElementById('s-msg').value};
+  const r=await api('/engage/send',{method:'POST',body:JSON.stringify(body)});
+  document.getElementById('wa').textContent='Send: '+(r.status||'')+' — '+(r.detail||JSON.stringify(r));
+}
+async function reminder(){
+  if(!SEL){alert('Pick a customer');return;}
+  const c=CUST.find(x=>x.id===SEL);const d=c.data||c;
+  const rows=INV.filter(r=>(r.customer||r.data?.customer)===SEL&&r.status==='Submitted');
+  const bal=rows.reduce((a,r)=>a+Math.max(0,(Number(r.grand_total||r.data?.grand_total)||0)-paidFor(r.id)),0);
+  const r=await api('/engage/send',{method:'POST',body:JSON.stringify({channel:'WhatsApp',to:d.phone,message:`Hello ${d.name}, you have an outstanding balance of ${money(bal)}. Please clear at your earliest. Thank you!`})});
+  document.getElementById('wa').textContent='Reminder: '+(r.status||'')+' — '+(r.detail||'');
+}
+
+// ---- Templates ----
+async function loadTemplates(){
+  TMPL=await api('/message_template');
+  document.getElementById('tpl-list').innerHTML=TMPL.length?TMPL.map(t=>`<div class="ntf"><div><b>${t.name} <span class="pill">${t.channel}</span> <span class="pill">${t.category||''}</span></b><small>${(t.body||'').slice(0,120)}</small></div></div>`).join(''):'<p class="muted">No templates yet.</p>';
+  fillTemplateSelect('s-tmpl',true);
+}
+async function saveTemplate(){
+  const data={name:document.getElementById('tpl-name').value,channel:document.getElementById('tpl-channel').value,category:document.getElementById('tpl-cat').value,language:document.getElementById('tpl-lang').value,subject:document.getElementById('tpl-subject').value,body:document.getElementById('tpl-body').value,active:true};
+  if(!data.name||!data.body){alert('Name and body required');return;}
+  const r=await api('/message_template',{method:'POST',body:JSON.stringify({data})});
+  if(r.error){alert(r.error);return;}
+  ['tpl-name','tpl-subject','tpl-body'].forEach(i=>document.getElementById(i).value='');
+  loadTemplates();
+}
+
+// ---- Campaigns ----
+async function loadCampaigns(){
+  const camps=await api('/campaign');TMPL=await api('/message_template');
+  document.getElementById('cmp-sel').innerHTML=camps.map(c=>`<option value="${c.id}">${c.name||c.id}</option>`).join('')||'<option value="">(create one below)</option>';
+  fillTemplateSelect('cmp-tmpl',false);
+  if(document.getElementById('cmp-sel').value)loadCampaignStats();
+  document.getElementById('cmp-sel').onchange=loadCampaignStats;
+}
+async function newCampaign(){
+  const name=document.getElementById('cmp-name').value;if(!name){alert('Name?');return;}
+  const r=await api('/campaign',{method:'POST',body:JSON.stringify({data:{name,channel:'WhatsApp',status:'Active'}})});
+  if(r.error){alert(r.error);return;}document.getElementById('cmp-name').value='';loadCampaigns();
+}
+async function runCampaign(){
+  const id=document.getElementById('cmp-sel').value;const templateId=document.getElementById('cmp-tmpl').value;
+  if(!id||!templateId){alert('Pick a campaign and template');return;}
+  const r=await api('/engage/campaign/'+id+'/run',{method:'POST',body:JSON.stringify({templateId,audience:document.getElementById('cmp-aud').value})});
+  if(r.error){document.getElementById('cmp-out').textContent='Error: '+r.error;return;}
+  document.getElementById('cmp-out').textContent=`Done — ${r.total} targeted · ${r.sent} sent · ${r.skipped} skipped · ${r.failed} failed`;
+  loadCampaignStats();
+}
+async function loadCampaignStats(){
+  const id=document.getElementById('cmp-sel').value;if(!id)return;
+  const s=await api('/engage/campaign/'+id+'/stats');
+  document.getElementById('cmp-stat').innerHTML=`<div><b>${s.total}</b><span>Touched</span></div><div><b style="color:var(--ok)">${s.sent}</b><span>Sent</span></div><div><b style="color:var(--warn)">${s.skipped}</b><span>Skipped</span></div><div><b style="color:var(--bad)">${s.failed}</b><span>Failed</span></div><div><b>${s.reach}%</b><span>Reach</span></div>`;
+}
+
+// ---- Notifications ----
+async function loadInbox(){
+  const list=await api('/notifications');
+  document.getElementById('inbox').innerHTML=list.length?list.map(n=>{const d=n.data||n;return `<div class="ntf ${d.read?'':'unread'}"><div><b>${d.title} <span class="pill ${d.severity||'info'}">${d.kind||''}</span></b><small>${d.body||''} · ${(n.created_at||'').slice(0,16).replace('T',' ')}</small></div>${d.read?'':`<button class="ghost sm" onclick="readOne('${n.id}')">Read</button>`}</div>`;}).join(''):'<p class="muted">Inbox zero. 🎉</p>';
+  refreshBadge();
+}
+async function readOne(id){await api('/notifications/'+id+'/read',{method:'POST'});loadInbox();}
+async function readAll(){await api('/notifications/read-all',{method:'POST',body:JSON.stringify({})});loadInbox();}
+async function syncAlerts(){const r=await api('/notifications/sync-alerts',{method:'POST',body:'{}'});document.getElementById('inbox').insertAdjacentHTML('afterbegin',`<p class="hint">Synced ${r.created} business alert(s) into the inbox.</p>`);loadInbox();}
+async function refreshBadge(){
+  const un=await api('/notifications?unread=1');const b=document.getElementById('nbadge');
+  if(un.length){b.style.display='';b.textContent=un.length;}else b.style.display='none';
+}
+init();
+</script>
+</body>
+</html>

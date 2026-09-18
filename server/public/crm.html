@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<link rel="manifest" href="/ui/manifest.webmanifest"/>
+<title>Epic BOS — CRM</title>
+<style>
+  :root{--bg:#0f1117;--card:#1a1d27;--card2:#151824;--ink:#e7e9ee;--muted:#9aa1b2;--brand:#5b8cff;--ok:#3ecf8e;--warn:#ffb454;--bad:#ff6b6b;--line:#232735}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{padding:16px 24px;display:flex;gap:14px;align-items:center;border-bottom:1px solid var(--line)}
+  header a{color:var(--muted);text-decoration:none}
+  header b{font-size:16px}
+  .grow{flex:1}
+  select,input{background:#0f1117;border:1px solid #2a2f3d;color:var(--ink);border-radius:8px;padding:7px 10px;font-size:13px}
+  main{padding:20px 24px;max-width:1240px;margin:0 auto}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:18px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .kpi b{display:block;font-size:22px;letter-spacing:.3px}
+  .kpi span{color:var(--muted);font-size:12px}
+  .kpi.hot{background:linear-gradient(135deg,#1f2540,#1a1d27);border-color:#33407a}
+  .row{display:grid;grid-template-columns:1.3fr 1fr;gap:16px;margin-bottom:16px}
+  .row3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;min-width:0}
+  .card h2{margin:0 0 14px;font-size:14px;display:flex;justify-content:space-between;align-items:center}
+  .card h2 small{color:var(--muted);font-weight:400;font-size:11px}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--line);font-size:12.5px}
+  th{color:var(--muted);font-weight:500}
+  .pill{background:#232735;border-radius:20px;padding:2px 9px;font-size:11px;color:var(--muted);white-space:nowrap}
+  .pill.Hot{background:#3a1f28;color:#ff8fa3}.pill.Warm{background:#3a331f;color:var(--warn)}.pill.Cold{background:#1f2b3a;color:#7fb0ff}
+  .pill.won{background:#173a2c;color:var(--ok)}
+  button{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:8px 13px;cursor:pointer;font-size:13px}
+  button.ghost{background:#2a2f3d}
+  button.sm{padding:4px 9px;font-size:11px}
+  .kanban{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;overflow-x:auto}
+  .kcol{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:10px;min-width:130px}
+  .kcol h4{margin:0 0 8px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;display:flex;justify-content:space-between}
+  .kcard{background:var(--card);border:1px solid var(--line);border-radius:9px;padding:8px;margin-bottom:8px;font-size:12px}
+  .kcard b{font-size:12px}
+  .kcard .amt{color:var(--ok);font-size:11px}
+  .bar{height:8px;border-radius:6px;background:#2a2f3d;overflow:hidden;margin-top:4px}
+  .bar>i{display:block;height:100%;background:var(--brand)}
+  .legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;font-size:11px;color:var(--muted)}
+  .legend span{display:flex;align-items:center;gap:5px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+  .muted{color:var(--muted)}
+  .tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .tabs button{background:#2a2f3d}
+  .tabs button.active{background:var(--brand)}
+  .drawer{position:fixed;top:0;right:0;width:min(420px,92vw);height:100%;background:var(--card);border-left:1px solid var(--line);padding:20px;overflow:auto;transform:translateX(100%);transition:.2s;z-index:20}
+  .drawer.open{transform:translateX(0)}
+  .drawer label{display:block;color:var(--muted);font-size:12px;margin:9px 0 3px}
+  .drawer input,.drawer select,.drawer textarea{width:100%;background:#0f1117;border:1px solid #2a2f3d;color:var(--ink);border-radius:8px;padding:8px}
+  .backdrop{position:fixed;inset:0;background:#0007;z-index:15;display:none}
+  .backdrop.open{display:block}
+</style>
+</head>
+<body>
+<header>
+  <a href="/ui/">← Epic BOS</a><b>🤝 CRM Command Center</b>
+  <span class="grow"></span>
+  <label class="muted" style="font-size:12px">Industry</label>
+  <select id="industry">
+    <option value="generic">Generic (All)</option>
+    <option value="retail">Retail & Distribution</option>
+    <option value="manufacturing">Manufacturing</option>
+    <option value="pharma">Pharma</option>
+    <option value="services">Services / Agency</option>
+    <option value="realestate">Real Estate</option>
+    <option value="education">Education</option>
+  </select>
+  <button onclick="openLead()">+ New Lead</button>
+</header>
+<main>
+  <div class="tabs">
+    <button class="active" data-tab="dash" onclick="tab('dash')">📊 Dashboard</button>
+    <button data-tab="pipeline" onclick="tab('pipeline')">🎯 Pipeline</button>
+    <button data-tab="leads" onclick="tab('leads')">📇 Leads</button>
+    <button data-tab="dupes" onclick="tab('dupes')">🔀 Duplicates</button>
+  </div>
+
+  <!-- DASHBOARD -->
+  <section id="tab-dash">
+    <div class="kpis">
+      <div class="kpi hot"><b id="k-weighted">₹–</b><span>Weighted Forecast</span></div>
+      <div class="kpi"><b id="k-open">₹–</b><span>Open Pipeline</span></div>
+      <div class="kpi"><b id="k-commit">₹–</b><span>Commit (late-stage)</span></div>
+      <div class="kpi"><b id="k-won">₹–</b><span>Won this period</span></div>
+      <div class="kpi"><b id="k-leads">–</b><span>Open Leads</span></div>
+      <div class="kpi"><b id="k-hot">–</b><span>Hot Leads</span></div>
+    </div>
+    <div class="row">
+      <div class="card">
+        <h2>Pipeline by Stage <small>value (₹) &amp; weighted</small></h2>
+        <div id="chart-pipeline"></div>
+      </div>
+      <div class="card">
+        <h2>Leads by Source <small>share</small></h2>
+        <div id="chart-source" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"></div>
+      </div>
+    </div>
+    <div class="row3">
+      <div class="card"><h2>Top Sources <small>conversion %</small></h2><div id="src-table"></div></div>
+      <div class="card"><h2>Owner Leaderboard <small>won ₹</small></h2><div id="owner-table"></div></div>
+      <div class="card"><h2>Lost Reasons <small>pareto</small></h2><div id="lost-table"></div></div>
+    </div>
+  </section>
+
+  <!-- PIPELINE KANBAN -->
+  <section id="tab-pipeline" style="display:none">
+    <div class="card"><h2>Opportunity Pipeline <small id="pipe-sum"></small></h2>
+      <div class="kanban" id="kanban"></div>
+    </div>
+  </section>
+
+  <!-- LEADS -->
+  <section id="tab-leads" style="display:none">
+    <div class="card">
+      <h2>Leads <small>scored &amp; ranked</small> <span class="grow"></span>
+        <button class="ghost sm" onclick="scoreAll()">⚡ Re-score all</button></h2>
+      <table id="leads-grid"><thead><tr><th>Name</th><th>Org</th><th>Source</th><th>Stage</th><th>Value</th><th>Score</th><th></th></tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <!-- DUPLICATES -->
+  <section id="tab-dupes" style="display:none">
+    <div class="card"><h2>Duplicate Leads <small>same phone / GSTIN / email</small></h2>
+      <div id="dupes-list"><p class="muted">Loading…</p></div>
+    </div>
+  </section>
+</main>
+
+<div class="backdrop" id="backdrop" onclick="closeLead()"></div>
+<div class="drawer" id="drawer">
+  <h2 style="margin-top:0">New Lead</h2>
+  <label>Contact name</label><input id="f-name"/>
+  <label>Organisation</label><input id="f-org"/>
+  <label>Phone</label><input id="f-phone" placeholder="+91…"/>
+  <label>Email</label><input id="f-email"/>
+  <label>GSTIN</label><input id="f-gstin"/>
+  <label>Source</label><select id="f-source"><option>WhatsApp</option><option>IndiaMART</option><option>JustDial</option><option>Website</option><option>Referral</option><option>Cold Call</option><option>Walk-in</option><option>Missed Call</option><option>Campaign</option><option>Other</option></select>
+  <label>Expected value (₹)</label><input id="f-value" type="number"/>
+  <label><input type="checkbox" id="f-consent" style="width:auto"/> Consent to contact</label>
+  <label>Notes</label><textarea id="f-notes" rows="2"></textarea>
+  <div style="margin-top:14px;display:flex;gap:8px"><button onclick="saveLead()">Save Lead</button><button class="ghost" onclick="closeLead()">Cancel</button></div>
+</div>
+
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY,'Content-Type':'application/json'},...o}).then(r=>r.json());
+const inr=n=>'₹'+Math.round(Number(n)||0).toLocaleString('en-IN');
+const STAGES=['Qualification','Needs Analysis','Proposal','Negotiation','Won','Lost'];
+const COLORS=['#5b8cff','#3ecf8e','#ffb454','#ff6b6b','#a78bfa','#22d3ee','#f472b6','#94a3b8'];
+
+function tab(t){document.querySelectorAll('main>section').forEach(s=>s.style.display='none');
+  document.getElementById('tab-'+t).style.display='';
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));
+  if(t==='pipeline')loadKanban(); if(t==='leads')loadLeads(); if(t==='dupes')loadDupes();}
+
+function openLead(){document.getElementById('drawer').classList.add('open');document.getElementById('backdrop').classList.add('open');}
+function closeLead(){document.getElementById('drawer').classList.remove('open');document.getElementById('backdrop').classList.remove('open');}
+
+async function saveLead(){
+  const g=id=>document.getElementById(id);
+  const body={name:g('f-name').value,org:g('f-org').value,phone:g('f-phone').value,email:g('f-email').value,
+    gstin:g('f-gstin').value,source:g('f-source').value,expected_value:Number(g('f-value').value||0),
+    consent:g('f-consent').checked,notes:g('f-notes').value,stage:'New'};
+  if(!body.name){alert('Name required');return;}
+  await api('/lead',{method:'POST',body:JSON.stringify({data:body})});
+  ['f-name','f-org','f-phone','f-email','f-gstin','f-value','f-notes'].forEach(i=>g(i).value='');
+  closeLead();loadDash();loadLeads();
+}
+
+// ---- tiny offline SVG charts (no CDN) ----
+function barChart(el,rows){ // rows: [{label,value,weighted}]
+  const max=Math.max(1,...rows.map(r=>r.value));
+  el.innerHTML=rows.map(r=>`
+    <div style="margin-bottom:9px">
+      <div style="display:flex;justify-content:space-between;font-size:12px"><span>${r.label}</span><span class="muted">${inr(r.value)}</span></div>
+      <div class="bar"><i style="width:${Math.round(r.value/max*100)}%"></i></div>
+      <div class="bar" style="height:5px;margin-top:2px;background:transparent"><i style="width:${Math.round((r.weighted||0)/max*100)}%;background:var(--ok);opacity:.8"></i></div>
+    </div>`).join('')||'<p class="muted">No opportunities yet.</p>';
+}
+function donut(el,rows){ // rows:[{label,value}]
+  const total=rows.reduce((a,r)=>a+r.value,0)||1;let acc=0;const R=52,C=2*Math.PI*R;
+  const segs=rows.map((r,i)=>{const frac=r.value/total;const dash=`${frac*C} ${C}`;const off=-acc*C;acc+=frac;
+    return `<circle r="${R}" cx="70" cy="70" fill="none" stroke="${COLORS[i%COLORS.length]}" stroke-width="18" stroke-dasharray="${dash}" stroke-dashoffset="${off}" transform="rotate(-90 70 70)"/>`;}).join('');
+  const legend=rows.map((r,i)=>`<span><i class="dot" style="background:${COLORS[i%COLORS.length]}"></i>${r.label} <b>${Math.round(r.value/total*100)}%</b></span>`).join('');
+  el.innerHTML=`<svg width="140" height="140" viewBox="0 0 140 140"><circle r="${R}" cx="70" cy="70" fill="none" stroke="#232735" stroke-width="18"/>${segs}
+    <text x="70" y="66" text-anchor="middle" fill="#e7e9ee" font-size="20" font-weight="600">${total}</text>
+    <text x="70" y="84" text-anchor="middle" fill="#9aa1b2" font-size="10">leads</text></svg><div class="legend" style="flex-direction:column">${legend}</div>`;
+}
+
+async function loadDash(){
+  const [fc,pipe,src,owners,lost,leads]=await Promise.all([
+    api('/crm/forecast'),api('/crm/pipeline'),api('/crm/analytics/source'),
+    api('/crm/analytics/owners'),api('/crm/analytics/lost-reasons'),api('/lead')]);
+  document.getElementById('k-weighted').textContent=inr(fc.weightedForecast);
+  document.getElementById('k-open').textContent=inr(fc.openValue);
+  document.getElementById('k-commit').textContent=inr(fc.commit);
+  document.getElementById('k-won').textContent=inr(fc.wonThisPeriod);
+  const open=leads.filter(l=>!l.converted&&l.stage!=='Lost');
+  document.getElementById('k-leads').textContent=open.length;
+  document.getElementById('k-hot').textContent=open.filter(l=>l.score_band==='Hot').length;
+
+  barChart(document.getElementById('chart-pipeline'),
+    STAGES.filter(s=>s!=='Lost').map(s=>({label:s,value:pipe[s]?.value||0,weighted:pipe[s]?.weighted||0})));
+  donut(document.getElementById('chart-source'),src.slice(0,7).map(s=>({label:s.source,value:s.leads})));
+
+  document.getElementById('src-table').innerHTML=table(src.slice(0,6),
+    [['source','Source'],['leads','Leads'],['won','Won'],['conversion','Conv %']]);
+  document.getElementById('owner-table').innerHTML=table(owners.slice(0,6),
+    [['owner','Owner'],['won','Won',inr],['open','Open',inr]]);
+  document.getElementById('lost-table').innerHTML=lost.length?table(lost,[['reason','Reason'],['count','#']]):'<p class="muted">No losses recorded.</p>';
+}
+function table(rows,cols){
+  return `<table><thead><tr>${cols.map(c=>`<th>${c[1]}</th>`).join('')}</tr></thead><tbody>${
+    rows.map(r=>`<tr>${cols.map(c=>`<td>${c[2]?c[2](r[c[0]]):(r[c[0]]??'')}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+
+async function loadKanban(){
+  const pipe=await api('/crm/pipeline');const opps=await api('/opportunity');
+  const el=document.getElementById('kanban');el.innerHTML='';
+  let tv=0,tw=0;
+  for(const st of STAGES){
+    const col=document.createElement('div');col.className='kcol';
+    const inStage=opps.filter(o=>(o.stage||'Qualification')===st);
+    const v=pipe[st]?.value||0;tv+=v;tw+=pipe[st]?.weighted||0;
+    col.innerHTML=`<h4>${st}<span>${inStage.length}</span></h4>`+
+      inStage.map(o=>`<div class="kcard"><b>${o.title||o.name}</b><div class="amt">${inr(o.expected_value)} · ${o.probability||0}%</div>
+        ${st!=='Won'&&st!=='Lost'?`<button class="ghost sm" style="margin-top:6px" onclick="winOpp('${o.id}')">Mark Won</button>`:''}</div>`).join('')+
+      `<div class="muted" style="font-size:11px;margin-top:4px">${inr(v)}</div>`;
+    el.appendChild(col);
+  }
+  document.getElementById('pipe-sum').textContent=`${opps.length} opps · ${inr(tv)} open · ${inr(tw)} weighted`;
+}
+async function winOpp(id){await api('/crm/opportunity/'+id+'/win',{method:'POST'});loadKanban();loadDash();}
+
+async function loadLeads(){
+  const leads=await api('/lead');const tb=document.querySelector('#leads-grid tbody');tb.innerHTML='';
+  leads.sort((a,b)=>(b.score||0)-(a.score||0));
+  for(const l of leads){
+    const tr=document.createElement('tr');
+    const band=l.score_band?`<span class="pill ${l.score_band}">${l.score_band} ${l.score||0}</span>`:`<button class="ghost sm" onclick="scoreOne('${l.id}')">Score</button>`;
+    const act=l.converted?'<span class="pill won">Converted</span>':`<button class="sm" onclick="convert('${l.id}')">Convert →</button>`;
+    tr.innerHTML=`<td>${l.name}</td><td>${l.org||''}</td><td><span class="pill">${l.source||''}</span></td>
+      <td>${l.stage}</td><td>${inr(l.expected_value)}</td><td>${band}</td><td>${act}</td>`;
+    tb.appendChild(tr);
+  }
+}
+async function scoreOne(id){await api('/crm/lead/'+id+'/score',{method:'POST'});loadLeads();}
+async function scoreAll(){await api('/crm/score-all',{method:'POST'});loadLeads();loadDash();}
+async function convert(id){
+  if(!confirm('Convert to customer + create an opportunity?'))return;
+  const r=await api('/lead/'+id+'/convert',{method:'POST',body:JSON.stringify({createQuotation:false})});
+  alert(r.error?('Failed: '+r.error):('Converted → '+(r.opportunity?.id||r.party?.id)));loadLeads();loadDash();
+}
+
+async function loadDupes(){
+  const dupes=await api('/crm/duplicates');const leads=await api('/lead');
+  const byId=Object.fromEntries(leads.map(l=>[l.id,l]));const el=document.getElementById('dupes-list');
+  if(!dupes.length){el.innerHTML='<p class="muted">No duplicates found. 🎉</p>';return;}
+  el.innerHTML=dupes.map(d=>{
+    const ids=d.leadIds;const primary=ids[0];
+    return `<div class="card" style="margin-bottom:10px;background:var(--card2)">
+      <div class="muted" style="font-size:12px">Match key: <code>${d.key}</code></div>
+      ${ids.map(id=>`<div>${byId[id]?.name||id} <span class="muted">(${byId[id]?.phone||''} ${byId[id]?.gstin||''})</span></div>`).join('')}
+      <button class="sm" style="margin-top:8px" onclick='mergeDup("${primary}",${JSON.stringify(ids.slice(1))})'>Merge into ${byId[primary]?.name||primary}</button>
+    </div>`;}).join('');
+}
+async function mergeDup(primary,dups){
+  await api('/crm/merge',{method:'POST',body:JSON.stringify({primary,duplicates:dups})});loadDupes();loadDash();
+}
+
+loadDash();
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('/ui/sw.js').catch(()=>{}));}
+</script>
+</body>
+</html>

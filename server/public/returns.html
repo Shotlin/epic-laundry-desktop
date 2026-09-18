@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Epic BOS — Returns</title>
+<style>
+  :root{--bg:#0f1117;--card:#1a1d27;--ink:#e7e9ee;--muted:#9aa1b2;--brand:#5b8cff;--ok:#3ecf8e}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{padding:16px 24px;display:flex;gap:12px;align-items:center;border-bottom:1px solid #232735}
+  header a{color:var(--muted);text-decoration:none}
+  main{padding:24px;display:grid;grid-template-columns:1fr 1.2fr;gap:20px}
+  .card{background:var(--card);border:1px solid #232735;border-radius:12px;padding:16px}
+  h2{margin:0 0 12px;font-size:15px}
+  label{display:block;color:var(--muted);font-size:12px;margin:8px 0 3px}
+  input,select,textarea{width:100%;background:#0f1117;border:1px solid #2a2f3d;color:var(--ink);border-radius:8px;padding:8px}
+  button{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:9px 14px;cursor:pointer;margin-top:10px}
+  button.ok{background:var(--ok)}button.ghost{background:#2a2f3d}
+  table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid #232735;font-size:13px}
+  .tabs{display:flex;gap:8px;margin-bottom:14px}
+  .tabs button{background:#232735;color:var(--muted);border:0;border-radius:8px;padding:8px 14px;cursor:pointer}
+  .tabs button.on{background:var(--brand);color:#fff}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<header><a href="/ui/">← Epic BOS</a><b>↩ Returns</b></header>
+<main>
+  <div class="card">
+    <div class="tabs">
+      <button class="on" onclick="show('cn',this)">Credit Note (sales return)</button>
+      <button onclick="show('dn',this)">Debit Note (purchase return)</button>
+    </div>
+    <div id="cn">
+      <label>Original Sales Invoice</label><select id="cn-ref" onchange="prefill('cn')"></select>
+      <label>Warehouse (stock returned in)</label><select id="cn-wh"></select>
+      <label>Reason</label><textarea id="cn-reason" rows="2"></textarea>
+    </div>
+    <div id="dn" class="hide">
+      <label>Original Purchase Invoice</label><select id="dn-ref" onchange="prefill('dn')"></select>
+      <label>Reason</label><textarea id="dn-reason" rows="2"></textarea>
+    </div>
+    <div id="items"></div>
+    <button class="ghost" onclick="addRow()">+ Add item</button>
+    <button class="ok" onclick="save()">Submit Return</button>
+  </div>
+  <div class="card">
+    <h2>Recent Returns</h2>
+    <table id="grid"><thead><tr><th>Type</th><th>No</th><th>Against</th><th>Total</th></tr></thead><tbody></tbody></table>
+  </div>
+</main>
+<script>
+const KEY='';
+const api=(p,o={})=>fetch('/api'+p,{headers:{'x-api-key':KEY},...o}).then(r=>r.json());
+let ITEMS=[],MODE='cn';
+function show(m,btn){MODE=m;document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));btn.classList.add('on');document.getElementById('cn').classList.toggle('hide',m!=='cn');document.getElementById('dn').classList.toggle('hide',m!=='dn');document.getElementById('items').innerHTML='';addRow();}
+function rowHtml(it){return `<div style="display:flex;gap:8px;margin-top:8px"><select class="it">${ITEMS.map(i=>`<option value="${i.id}" ${it&&it.item===i.id?'selected':''}>${i.data.name}</option>`).join('')}</select><input class="q" type="number" placeholder="qty" value="${it?it.qty:''}"/><input class="r" type="number" placeholder="rate" value="${it?it.rate:''}"/></div>`;}
+function addRow(){document.getElementById('items').insertAdjacentHTML('beforeend',rowHtml());}
+function fillItems(){}
+async function prefill(kind){
+  const sel=kind==='cn'?cnref:dnref;
+  const [ent,id]=sel.value.split(':');
+  const inv=await api('/'+ent+'/'+id);
+  document.getElementById('items').innerHTML= (inv.data.items||[]).map(it=>rowHtml(it)).join('');
+}
+async function load(){
+  ITEMS=await api('/item');const whs=await api('/warehouse');
+  const sales=await api('/sales_invoice'); const pur=await api('/purchase_invoice');
+  cnref.innerHTML=sales.filter(r=>r.status==='Submitted').map(r=>`<option value="sales_invoice:${r.id}">${r.name} (₹${r.grand_total})</option>`).join('');
+  dnref.innerHTML=pur.filter(r=>r.status==='Submitted').map(r=>`<option value="purchase_invoice:${r.id}">${r.name}</option>`).join('');
+  cnwh.innerHTML=whs.map(w=>`<option value="${w.id}">${w.data.name}</option>`).join('');
+  addRow();
+  const cn=await api('/credit_note'); const dn=await api('/debit_note');
+  const tb=document.querySelector('#grid tbody');tb.innerHTML='';
+  for(const r of [...cn,...dn].reverse()){const tr=document.createElement('tr');tr.innerHTML=`<td>${r.entity}</td><td>${r.name}</td><td>${r.data.reference_invoice||''}</td><td>₹${r.grand_total||''}</td>`;tb.appendChild(tr);}
+}
+async function save(){
+  const rows=[...document.querySelectorAll('#items div')].filter(d=>d.querySelector('.it'));
+  const its=rows.map(r=>({item:r.querySelector('.it').value,qty:Number(r.querySelector('.q').value),rate:Number(r.querySelector('.r').value||0),gst_rate:ITEMS.find(i=>i.id===r.querySelector('.it').value)?.data?.gst_rate}));
+  if(!its.length||its.some(i=>!i.item||!i.qty)){alert('Add at least one item with qty');return;}
+  if(MODE==='cn'){
+    const [ent,id]=cnref.value.split(':');
+    const body={reference_invoice:id,posting_date:new Date().toISOString().slice(0,10),warehouse:cnwh.value||undefined,reason:cnreason.value,items:its};
+    const r=await api('/credit_note',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});
+    if(r.error){alert(r.error);return;} await api('/credit_note/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});
+  } else {
+    const [ent,id]=dnref.value.split(':');
+    const body={reference_invoice:id,posting_date:new Date().toISOString().slice(0,10),reason:dnreason.value,items:its};
+    const r=await api('/debit_note',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':KEY},body:JSON.stringify({data:body})});
+    if(r.error){alert(r.error);return;} await api('/debit_note/'+r.id+'/submit',{method:'POST',headers:{'x-api-key':KEY}});
+  }
+  load();
+}
+load();
+</script>
+</body>
+</html>
