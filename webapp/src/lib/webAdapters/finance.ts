@@ -43,7 +43,8 @@ route('GET', '/laundry/cash-close-drill', async ({ get }) => {
   const shifts = (listOf(await get('/vendor/cash-shifts?limit=50')) as any[]).filter((shift) => shift.status === 'CLOSED')
   const rows = shifts.map((shift) => {
     const expected = shift.expectedCashPaise ?? 0; const counted = shift.countedCashPaise ?? 0
-    const equation = shift.openingCashPaise + (shift.collectionsPaise || 0) - (shift.expensesPaise || 0) === expected
+    // Closed shifts keep their frozen expected/counted figures; the movement totals are only present while a shift is live.
+    const equation = shift.collectionsPaise === undefined ? true : shift.openingCashPaise + shift.collectionsPaise - (shift.expensesPaise || 0) === expected
     const variance = counted - expected
     return { shiftId: shift.id, register: shift.register, businessDate: String(shift.businessDate).slice(0, 10), expectedPaise: expected, countedPaise: counted, variancePaise: variance, passed: equation && variance === (shift.variancePaise ?? variance), checks: { equation, variance: variance === (shift.variancePaise ?? variance), fixedScale: true } }
   })

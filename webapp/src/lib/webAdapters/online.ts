@@ -13,11 +13,15 @@ const REMOTE_STATE: Record<string, string> = {
 }
 const num = (value: unknown) => (value === null || value === undefined || value === '' || Number.isNaN(Number(value)) ? undefined : Number(value))
 
+const addressText = (value: any) => (value && typeof value === 'object'
+  ? [value.label && `${value.label}:`, value.addressLine1, value.addressLine2, value.city, value.pincode].filter(Boolean).join(' ')
+  : String(value || ''))
+
 const onlineOrder = (order: any) => ({
   id: order.id, externalOrderId: order.id, orderNumber: order.order_number, channel: 'LNDRY App', state: REMOTE_STATE[order.status] || 'AwaitingAcceptance',
   sourceVersion: 1,
   customer: { name: order.customer_name || '', phone: order.customer_phone || '' },
-  pickup: { date: order.pickup_date ? String(order.pickup_date).slice(0, 10) : undefined, address: order.delivery_address, expressPickup: Boolean(order.is_express_pickup) },
+  pickup: { date: order.pickup_date ? String(order.pickup_date).slice(0, 10) : undefined, address: addressText(order.delivery_address), expressPickup: Boolean(order.is_express_pickup) },
   request: { items: order.items || [], estimate: { amountPaise: num(order.estimated_amount_paise), payablePaise: num(order.payable_amount_paise) }, remoteStatus: order.status },
   paymentState: order.payment_status || '', preferences: '', notes: order.delivery_notes || '', syncState: 'Synced', localOrderId: undefined,
   updatedAt: order.updated_at || order.created_at,
@@ -57,7 +61,8 @@ route('GET', '/marketplace/orders/:id/customer-status', async ({ get, params }) 
   const order = await get(`/vendor/orders/${params.id}`)
   return {
     status: REMOTE_STATE[order.status] || order.status, label: String(order.status || '').replace(/_/g, ' ').toLowerCase(),
-    timeline: (order.timeline || []).map((entry: any, index: number) => ({ eventId: `${params.id}:${index}`, at: entry.timestamp, status: entry.new_status, label: String(entry.new_status || '').replace(/_/g, ' ').toLowerCase() })),
+    timeline: (order.timeline || []).map((entry: any, index: number) => ({ eventId: `${params.id}:${index}`, at: entry.timestamp, status: String(entry.new_status || ''), label: String(entry.new_status || '').replace(/_/g, ' ').toLowerCase(), source: String(entry.actor_role || 'SYSTEM') })),
+    evidence: { timelineDerivedFromEvents: true },
   }
 })
 route('GET', '/marketplace/orders/:id/pickup', async () => null)

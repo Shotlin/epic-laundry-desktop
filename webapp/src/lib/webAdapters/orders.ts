@@ -155,6 +155,8 @@ route('GET', '/laundry/orders', async ({ get, query }) => {
   for (const key of ['search', 'from', 'to']) { const value = query.get(key); if (value) params.set(key, value) }
   params.set('limit', '500')
   const all = (listOf(await get(`/vendor/counter/orders?${params}`)) as RealOrder[]).map(laundryOrder)
+  // Callers that do not paginate (Print Centre search) expect the bare list.
+  if (!query.get('page')) return all
   const pageSize = Math.max(1, Number(query.get('pageSize')) || 50)
   const page = Math.max(1, Number(query.get('page')) || 1)
   return { items: all.slice((page - 1) * pageSize, page * pageSize), total: all.length, page, pageSize, totalPages: Math.max(1, Math.ceil(all.length / pageSize)) }
@@ -274,7 +276,7 @@ route('GET', '/laundry/customers/:id', async ({ get, params }) => {
     metrics: {
       revenue: rupees(active.reduce((sum, order) => sum + order.totalPaise, 0)),
       orderBalance: rupees(active.reduce((sum, order) => sum + Math.max(0, order.totalPaise - order.amountPaidPaise), 0)),
-      walletBalance: 0, rewardPoints: 0, lastVisit: active[0]?.placedAt || null, currentPackage: null,
+      walletBalance: 0, rewardPoints: 0, lastVisit: active[0]?.placedAt ? String(active[0].placedAt).slice(0, 10) : null, currentPackage: null,
     },
     addresses: [],
     orders,
