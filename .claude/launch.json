@@ -11,6 +11,13 @@
         "PORT": "3011",
         "EPIC_DATA_FILE": "./data/_uitest.json"
       }
+    },
+    {
+      "name": "epic-webapp",
+      "cwd": "webapp",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5199
     }
   ]
 }

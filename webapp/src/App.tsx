@@ -5,6 +5,7 @@ import { AuthGate } from "@/components/auth/AuthGate";
 import { canUseUi, type UiPermission } from "@/components/laundry/LaundryShell";
 import { useQuery } from "@tanstack/react-query";
 import { apiGet } from "@/lib/api";
+import { isWebOnly, sessionFromStoredCloud } from "@/lib/cloudAuth";
 
 // Operational pages are independently loaded. A counter opening the dashboard
 // should not pay the startup cost of reports, statutory controls, imports, or
@@ -104,7 +105,7 @@ function RouteLoading() {
 }
 
 function LaundryLanding() {
-  const session = useQuery({ queryKey: ['auth-session'], queryFn: () => apiGet<{ user: { roles: string[] } | null }>('/auth/session') })
+  const session = useQuery({ queryKey: ['auth-session'], queryFn: () => isWebOnly ? Promise.resolve(sessionFromStoredCloud()) : apiGet<{ user: { roles: string[] } | null }>('/auth/session') })
   if (session.isLoading) return <div className="grid h-screen place-items-center text-sm text-muted-foreground">Opening your laundry workspace…</div>
   const roles = session.data?.user?.roles || []
   const target = roles.includes('owner')
@@ -120,7 +121,7 @@ function LaundryLanding() {
 }
 
 function PermissionGate({ permission, children }: { permission: UiPermission; children: ReactNode }) {
-  const session = useQuery({ queryKey: ['auth-session'], queryFn: () => apiGet<{ user: { roles: string[] } | null }>('/auth/session') })
+  const session = useQuery({ queryKey: ['auth-session'], queryFn: () => isWebOnly ? Promise.resolve(sessionFromStoredCloud()) : apiGet<{ user: { roles: string[] } | null }>('/auth/session') })
   if (session.isLoading) return <div className="grid h-72 place-items-center text-sm text-muted-foreground">Checking your workspace access…</div>
   if (!canUseUi(session.data?.user?.roles, permission)) return <section className="mx-auto mt-16 max-w-lg rounded-2xl border border-amber-200 bg-amber-50 p-7 text-center text-amber-950"><h1 className="font-serif text-2xl">This workspace is not assigned to your role.</h1><p className="mt-2 text-sm leading-6">Ask an owner to update your branch access if you need this part of Epic Laundry.</p></section>
   return <>{children}</>

@@ -1,7 +1,16 @@
 import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
 import { ArrowLeft, CheckCircle2, KeyRound, MonitorPlay, Phone, ShieldCheck, Sparkles } from 'lucide-react'
 import { apiGet, apiPost, operatorErrorMessage } from '@/lib/api'
+import { sendOtp, loginWithOtp, readStoredSession, clearStoredSession, CloudAuthError, isWebOnly } from '@/lib/cloudAuth'
 import { lndryBrand } from '@/assets/generated/manifest'
+
+// When running as a plain website (no Electron `window.epic` bridge), there
+// is no local desktop server to ask about workspace mode / bootstrap status
+// / a cookie session — the real LNDRY backend, via cloudAuth.ts, is the only
+// door in. The desktop-only paths below (demo workspace, local bootstrap,
+// username/password) stay in this file untouched for the Electron build,
+// gated the same way they already were by `window.epic?.*` being undefined
+// in a browser — this is the same file working both ways, not two apps.
 
 type Session = { user: { username: string; roles: string[]; tenant: string; storeId: string } | null }
 type WorkspaceMode = 'production' | 'demo'
@@ -33,7 +42,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [backupConfigured, setBackupConfigured] = useState(false)
 
   useEffect(() => {
-    const onExpired = () => { setPassword(''); setError('Your session expired. Sign in again.'); setState('signin') }
+    const onExpired = () => {
+      if (isWebOnly) { clearStoredSession(); setError('Your session expired. Sign in again.'); setState('cloud-login'); return }
+      setPassword(''); setError('Your session expired. Sign in again.'); setState('signin')
+    }
     window.addEventListener('epic-auth-expired', onExpired)
     return () => window.removeEventListener('epic-auth-expired', onExpired)
   }, [])
@@ -48,6 +60,14 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [state])
 
   useEffect(() => {
+    if (isWebOnly) {
+      // No local server to ask anything of — the only source of truth is
+      // the token pair cloudAuth.ts already stored from a previous login.
+      const stored = readStoredSession()
+      setWorkspace('production')
+      setState(stored ? 'ready' : 'cloud-login')
+      return
+    }
     const workspaceStatus = window.epic?.workspaceStatus?.() || apiGet<{ mode: WorkspaceMode }>('/workspace/status').catch(() => ({ mode: 'production' as WorkspaceMode }))
     Promise.all([apiGet<Session>('/auth/session').catch(() => null), apiGet<{ needsBootstrap: boolean }>('/auth/bootstrap-status'), workspaceStatus])
       .then(([session, bootstrap, desktopWorkspace]) => {
@@ -86,6 +106,18 @@ export function AuthGate({ children }: { children: ReactNode }) {
     setSaving(true)
     try {
       if (state === 'cloud-login') {
+        if (isWebOnly) {
+          if (!cloudOtpSent) {
+            const result = await sendOtp(cloudPhone)
+            setCloudOtpSent(true)
+            setCloudDevOtp(result.otp || '')
+            if (result.otp) setCloudOtp(result.otp)
+            return
+          }
+          await loginWithOtp(cloudPhone, cloudOtp)
+          setState('ready'); setCloudOtp(''); setCloudOtpSent(false); setCloudDevOtp('')
+          return
+        }
         if (!cloudOtpSent) {
           const result = await apiPost<{ sent: true; otp?: string }>('/auth/cloud/otp', { phone: cloudPhone })
           setCloudOtpSent(true)
@@ -103,7 +135,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
       }
       else await apiPost('/auth/sign-in', { username, password })
       setState('ready'); setPassword(''); setSetup((current) => ({ ...current, password: '', confirmPassword: '' }))
-    } catch (cause) { setError(operatorErrorMessage(cause, 'Unable to sign in.')) } finally { setSaving(false) }
+    } catch (cause) {
+      if (cause instanceof CloudAuthError) { setError(cause.message); return }
+      setError(operatorErrorMessage(cause, 'Unable to sign in.'))
+    } finally { setSaving(false) }
   }
 
   if (state === 'ready') return <>{children}</>

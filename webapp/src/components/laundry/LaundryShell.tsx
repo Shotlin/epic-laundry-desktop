@@ -6,6 +6,7 @@ import { apiGet, apiPost } from '@/lib/api'
 import { useEffect, useState } from 'react'
 import { lndryBrand } from '@/assets/generated/manifest'
 import { exportOfflineQueue, offlineQueueSnapshot, replayOfflineQueue, retryOfflineDeadLetters } from '@/lib/api'
+import { isWebOnly, sessionFromStoredCloud, clearStoredSession } from '@/lib/cloudAuth'
 import { CommandPalette } from '@/components/layout/CommandPalette'
 
 const navigation: Array<{ to: string; label: string; icon: typeof LayoutDashboard; permission: UiPermission }> = [
@@ -71,11 +72,16 @@ export function LaundryShell() {
   const location = useLocation()
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
-  const session = useQuery({ queryKey: ['auth-session'], queryFn: () => apiGet<Session>('/auth/session') })
-  const workspace = useQuery({ queryKey: ['workspace-mode'], queryFn: () => window.epic?.workspaceStatus?.() || apiGet<{ mode: 'production' | 'demo' }>('/workspace/status') })
-  const notifications = useQuery({ queryKey: ['notifications'], queryFn: () => apiGet<NotificationItem[]>('/notifications') })
+  // In the website deployment there is no local desktop server to ask —
+  // session comes straight from the already-stored login (see cloudAuth.ts),
+  // workspace mode is always 'production' (no demo/local-bootstrap concept
+  // over the real backend), and notifications have no real-backend
+  // equivalent yet (a genuine, flagged gap, not silently assumed working).
+  const session = useQuery({ queryKey: ['auth-session'], queryFn: () => isWebOnly ? Promise.resolve(sessionFromStoredCloud()) : apiGet<Session>('/auth/session') })
+  const workspace = useQuery({ queryKey: ['workspace-mode'], queryFn: () => window.epic?.workspaceStatus?.() || (isWebOnly ? Promise.resolve({ mode: 'production' as const }) : apiGet<{ mode: 'production' | 'demo' }>('/workspace/status')) })
+  const notifications = useQuery({ queryKey: ['notifications'], queryFn: () => isWebOnly ? Promise.resolve([] as NotificationItem[]) : apiGet<NotificationItem[]>('/notifications') })
   const markRead = useMutation({ mutationFn: (id: string) => apiPost(`/notifications/${id}/read`, { read: true }), onSuccess: () => notifications.refetch() })
-  const signOut = useMutation({ mutationFn: () => apiPost('/auth/sign-out'), onSuccess: () => window.location.assign('/ui/app/') })
+  const signOut = useMutation({ mutationFn: () => isWebOnly ? Promise.resolve(clearStoredSession()) : apiPost('/auth/sign-out'), onSuccess: () => window.location.assign('/ui/app/') })
   const resetDemo = useMutation({ mutationFn: () => window.epic?.resetDemoWorkspace?.() || Promise.reject(new Error('Demo reset is only available in the desktop application.')) })
   const permittedNavigation = navigation.filter((item) => canUseUi(session.data?.user?.roles, item.permission))
   const canBook = canUseUi(session.data?.user?.roles, 'orders.create')
@@ -233,6 +239,13 @@ function NotificationPopover({ rows, pending, onRead, onClose }: { rows: Notific
 }
 
 function StoreSwitcher() {
+  // A LNDRY vendor account is one shop, not several interchangeable
+  // branches — epic's own multi-branch switcher has no real-backend
+  // equivalent to switch between, so the website build skips the query
+  // entirely rather than crash on a shape (session.user.roles) the real
+  // backend never returns the way the local desktop server's own
+  // /auth/session did.
+  if (isWebOnly) return <div className="hidden items-center gap-2 text-sm text-[#617178] lg:flex"><BookOpenCheck className="h-4 w-4 text-[#3a7d78]" /><span>LNDRY vendor workspace</span></div>
   const session = useQuery({ queryKey: ['auth-session'], queryFn: () => apiGet<Session>('/auth/session') })
   const isOwner = Boolean(session.data?.user?.roles.includes('owner'))
   const branches = useQuery({ queryKey: ['branch-memberships'], queryFn: () => apiGet<Branch[]>('/settings/stores'), enabled: isOwner })

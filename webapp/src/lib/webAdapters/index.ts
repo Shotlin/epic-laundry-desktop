@@ -1,0 +1,10 @@
+// Importing each module registers its routes with the router in core.ts.
+import './dashboard'
+import './catalogue'
+import './orders'
+import './tracking'
+import './online'
+import './finance'
+import './statistics'
+import './counterDesk'
+import './quote'
