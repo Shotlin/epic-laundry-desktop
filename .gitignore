@@ -40,3 +40,6 @@ electron-builder-cache/
 # Local reference and integration checkouts (independent repositories)
 _bakaloo_ref/
 shotlinXchat/
+
+# website build
+webapp/dist/

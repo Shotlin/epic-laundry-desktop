@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Epic BOS — modern React UI (Vite + Tailwind + shadcn/ui + Recharts). Builds to static offline files served by the Fastify kernel and loaded by the Electron desktop app.",
+  "description": "Epic BOS \u2014 modern React UI (Vite + Tailwind + shadcn/ui + Recharts). Builds to static offline files served by the Fastify kernel and loaded by the Electron desktop app.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -11,7 +11,8 @@
     "audit:a11y": "node scripts/accessibility-audit.mjs",
     "preview": "vite preview",
     "test:e2e": "playwright test",
-    "test:e2e:empty": "playwright test --config=playwright.empty.config.ts e2e/empty-state-walkthrough.spec.ts"
+    "test:e2e:empty": "playwright test --config=playwright.empty.config.ts e2e/empty-state-walkthrough.spec.ts",
+    "build:web": "tsc -b && node scripts/build-web.mjs"
   },
   "dependencies": {
     "@e965/xlsx": "0.20.3",
