@@ -20,7 +20,7 @@ export const modeToWire = (label: string) => {
 
 export type RealOrder = {
   id: string; orderNumber: string; customer: { id: string; name: string; phone: string }
-  items: Array<{ garmentId?: string; serviceId?: string; garmentTypeId?: string | null; vendorServiceId?: string | null; name: string; serviceName: string; unit: string; qty: number; ratePaise: number; amountPaise: number }>
+  items: Array<{ garmentId?: string; serviceId?: string; garmentTypeId?: string | null; vendorServiceId?: string | null; name: string; serviceName: string; categoryName?: string | null; unit: string; qty: number; ratePaise: number; amountPaise: number }>
   subtotalPaise: number; chargesPaise: number; discountsPaise: number; taxRateBps: number; taxPaise: number; totalPaise: number
   paymentMode: string | null; amountPaidPaise: number; paymentStatus: string; status: string; version: number; source: string
   orderDate: string; expectedDeliveryDate: string | null; fulfillmentMode: string | null; deliveryAddress: string | null; serviceZone: string | null
@@ -79,13 +79,22 @@ function detailShape(detail: Detail) {
   const base = laundryOrder(detail.order)
   const customer = { name: detail.order.customer.name, phone: detail.order.customer.phone }
   const dueDate = base.expectedDeliveryDate
+  const stage = (state: string) => String(state || '').replace(/_/g, ' ')
   const tags = detail.units.map((unit) => ({
-    tagNumber: unit.tagCode, tagKind: 'garment' as const, garment: unit.garmentName, service: detail.order.items[unit.itemIndex]?.serviceName || '',
+    unitId: unit.id, state: stage(unit.state),
+    tagNumber: unit.tagCode, tagKind: 'garment' as const, garment: unit.garmentName, service: detail.order.items[unit.itemIndex]?.serviceName || '', category: detail.order.items[unit.itemIndex]?.categoryName || undefined,
     sequence: unit.sequence, total: detail.order.items[unit.itemIndex]?.qty || 1, orderDate: base.orderDate, expectedDeliveryDate: dueDate,
     orderNumber: base.orderNumber, customer: customer.name,
   }))
+  // Bag / container tags of the order (weight-billed lines), in the same shape a booking returns them.
+  const containerTags = detail.containers.map((container) => ({
+    containerId: container.id, tagNumber: container.tagCode, tagPayload: container.tagCode, tagKind: 'container' as const,
+    orderNumber: base.orderNumber, customer: customer.name, garment: 'Bag', service: 'Bulk laundry', sequence: container.sequence, total: container.total,
+    weightKg: container.weightKg ?? undefined, orderDate: base.orderDate, expectedDeliveryDate: dueDate, state: stage(container.state),
+  }))
   return {
     ...base,
+    containerTags,
     physicalUnits: detail.units.map((unit) => ({
       id: unit.id, code: unit.tagCode, tagCode: unit.tagCode, orderId: base.id, orderNumber: base.orderNumber, customer,
       garment: { name: unit.garmentName }, service: { name: detail.order.items[unit.itemIndex]?.serviceName || '' }, unit: 'Piece',

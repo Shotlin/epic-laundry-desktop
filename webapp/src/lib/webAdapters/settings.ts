@@ -6,7 +6,7 @@ import { storedPrintSettings } from './counterDesk'
 
 const STORE_KEY = 'epic-web-print-settings-v1'
 const ZONE_KEY = 'epic-web-service-zones-v1'
-const DEFAULT_TAG_TEMPLATE = { preset: 'a4-6', widthMm: 96, heightMm: 84, columns: 2, rows: 3, orientation: 'portrait', pageSize: 'A4', marginMm: 8, fontScale: 1, lineSpacing: 1, codeFormat: 'qr', showLogo: true, showGarment: true, showService: true, showInvoiceNumber: false, showPhone: false, showOrderDate: false, showTagCode: true, showStoreName: true, showCustomer: true, showOrder: true, showDueDate: true, showSequence: true, showNotes: false, showExpress: true, showSpecialCare: true }
+const DEFAULT_TAG_TEMPLATE = { preset: 'a4-6', widthMm: 96, heightMm: 84, columns: 2, rows: 3, orientation: 'portrait', pageSize: 'A4', marginMm: 8, fontScale: 1, lineSpacing: 1, codeFormat: 'code128', printDpi: 300, showLogo: true, showGarment: true, showService: true, showInvoiceNumber: false, showPhone: false, showOrderDate: false, showTagCode: true, showStoreName: true, showCustomer: true, showOrder: true, showDueDate: true, showSequence: true, showNotes: false, showExpress: true, showSpecialCare: true }
 
 const readJson = (key: string, fallback: any) => { try { return JSON.parse(window.localStorage.getItem(key) || 'null') ?? fallback } catch { return fallback } }
 const writeJson = (key: string, value: unknown) => { try { window.localStorage.setItem(key, JSON.stringify(value)) } catch { /* private mode: setting just will not persist */ } }

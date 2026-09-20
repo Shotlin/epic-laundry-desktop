@@ -1,7 +1,6 @@
-import QRCode from "qrcode";
-import JsBarcode from "jsbarcode";
 import { lndryBrand } from "@/assets/generated/manifest";
 import { formatINR } from "@/lib/utils";
+import { buildTagsHtml, deliverDocument, type DocumentOutcome } from "@/lib/tagOutput";
 
 export type PrintTag = {
   unitId?: string;
@@ -15,6 +14,8 @@ export type PrintTag = {
   invoiceNumber?: string;
   garment: string;
   service: string;
+  /** Category / sub-category, when the order recorded one (older orders only have the service). */
+  category?: string;
   sequence: number;
   lineSequence?: number;
   total: number;
@@ -62,6 +63,8 @@ export type PrintSettings = {
   afterBooking?: "ask" | "open-print-centre" | "auto-print" | "none";
   tagTemplate?: {
     preset?: string;
+    /** Printer resolution the barcode is sized for: 203 (typical thermal), 300 or 600 dpi. */
+    printDpi?: number;
     widthMm?: number;
     heightMm?: number;
     columns?: number;
@@ -71,7 +74,8 @@ export type PrintSettings = {
     marginMm?: number;
     fontScale?: number;
     lineSpacing?: number;
-    codeFormat?: "qr" | "code128" | "qr+code128";
+    /** Tags always print a Code 128 barcode; older saved templates may still say "qr" and are treated the same. */
+    codeFormat?: string;
     showLogo?: boolean;
     showGarment?: boolean;
     showService?: boolean;
@@ -149,101 +153,40 @@ export async function buildLaundryPrintHtml(
     return documentHtml("Customer receipt", body, "receipt-page");
   }
   const tags = requestedTags || [];
-  const template = settings?.tagTemplate;
-  const codeFormat = template?.codeFormat || "qr";
-  const showQr = codeFormat === "qr" || codeFormat === "qr+code128";
-  const showBarcode = codeFormat === "code128" || codeFormat === "qr+code128";
-  const renderedTags = await Promise.all(
-    tags.map(async (tag) => {
-      const payload = tag.tagPayload || `ELT:v1:${tag.tagNumber}`;
-      const qr = showQr
-        ? await QRCode.toDataURL(payload, {
-            width: 180,
-            margin: 1,
-            errorCorrectionLevel: "M",
-            color: { dark: "#123039", light: "#ffffff" },
-          }).catch(() => "")
-        : "";
-      let barcode = "";
-      if (showBarcode) {
-        const svg = document.createElementNS(
-          "http://www.w3.org/2000/svg",
-          "svg",
-        );
-        try {
-          JsBarcode(svg, tag.tagNumber, {
-            format: "CODE128",
-            displayValue: true,
-            width: 1.2,
-            height: 28,
-            margin: 0,
-            fontSize: 8,
-            lineColor: "#123039",
-          });
-          barcode = svg.outerHTML;
-        } catch {
-          barcode = "";
-        }
-      }
-      const details = [
-        template?.showOrder !== false
-          ? `<div class="order">${escapeHtml(tag.orderNumber)}</div>`
-          : "",
-        template?.showInvoiceNumber
-          ? `<div class="order">Invoice ${escapeHtml(tag.invoiceNumber || "")}</div>`
-          : "",
-        template?.showCustomer !== false
-          ? `<div class="order">${escapeHtml(tag.customer)}</div>`
-          : "",
-        template?.showPhone
-          ? `<div class="order">${escapeHtml(tag.customerPhone || "")}</div>`
-          : "",
-        template?.showOrderDate
-          ? `<div class="order">Booked ${escapeHtml(tag.orderDate)}</div>`
-          : "",
-        template?.showDueDate !== false
-          ? `<div class="due">DUE ${escapeHtml(tag.expectedDeliveryDate)}</div>`
-          : "",
-        template?.showNotes && tag.notes
-          ? `<div class="order">${escapeHtml(tag.notes)}</div>`
-          : "",
-        template?.showExpress && tag.express
-          ? `<div class="due">EXPRESS</div>`
-          : "",
-        template?.showSpecialCare && tag.specialCare
-          ? `<div class="due">SPECIAL CARE</div>`
-          : "",
-      ].join("");
-      const footerCode =
-        template?.showTagCode !== false
-          ? `<span>${escapeHtml(tag.tagNumber)}</span>`
-          : "<span></span>";
-      return `<article class="tag"><div class="tag-head"><span class="brand-mini">${template?.showStoreName !== false ? "EPIC LAUNDRY" : "LAUNDRY"}${tag.tagKind === "container" ? " · CONTAINER" : ""}</span>${template?.showSequence !== false ? `<span class="sequence">${tag.sequence} / ${tag.total}</span>` : ""}</div><div class="tag-main"><div>${template?.showGarment !== false ? `<div class="garment">${escapeHtml(tag.garment)}</div>` : ""}${template?.showService !== false ? `<div class="service">${escapeHtml(tag.service)}</div>` : ""}${details}</div>${qr ? `<img class="qr" src="${qr}" alt="Opaque tag QR">` : ""}</div>${barcode ? `<div class="barcode">${barcode}</div>` : ""}<div class="tag-foot">${footerCode}<span>${tag.state ? escapeHtml(tag.state) : "INTAKE"}</span></div></article>`;
-    }),
-  );
   const containerOnly =
     tags.length > 0 && tags.every((tag) => tag.tagKind === "container");
-  const tagLabel = containerOnly ? "Container tags" : "Garment tags";
-  const body = `${header}<div class="eyebrow">${tagLabel} · ${tags.length} selected</div><h1>${escapeHtml(order.orderNumber)}</h1><p class="muted">${escapeHtml(order.customer.name)} · due ${escapeHtml(order.expectedDeliveryDate)} · order-wide sequence</p><main class="tags">${renderedTags.join("")}</main>`;
-  const widthMm = Number(template?.widthMm) || 96;
-  const heightMm = Number(template?.heightMm) || 84;
-  const columns = Math.max(1, Math.min(6, Number(template?.columns) || 2));
-  const rows = Math.max(1, Math.min(12, Number(template?.rows) || 3));
-  const pageSize =
-    template?.pageSize === "thermal" || template?.preset?.startsWith("thermal")
-      ? `${widthMm}mm ${heightMm}mm`
-      : "A4";
-  const marginMm = Number(template?.marginMm) || 8;
-  const fontScale = Number(template?.fontScale) || 1;
-  const lineSpacing = Number(template?.lineSpacing) || 1;
-  const orientation =
-    template?.orientation === "landscape" ? "landscape" : "portrait";
-  return documentHtml(
-    tagLabel,
-    body,
-    "tag-page",
-    `@page{size:${pageSize} ${pageSize === "A4" ? orientation : ""};margin:${marginMm}mm}.tags{grid-template-columns:repeat(${columns},1fr);grid-template-rows:repeat(${rows},auto)}.tag{height:${heightMm}mm;font-size:${fontScale}em;line-height:${lineSpacing}}.barcode svg{width:100%;height:auto;max-height:13mm}`,
+  return buildTagsHtml(
+    tags,
+    settings,
+    logo || undefined,
+    `${containerOnly ? "Container tags" : "Garment tags"} · ${order.orderNumber}`,
   );
+}
+
+/**
+ * Builds the document and sends it to paper or a PDF file — the one entry point every print button
+ * uses, so the Print Centre, after-booking print and single-tag reprint all behave the same.
+ * Tags are printed / saved in the order given (a batch runs first tag to last with no re-selection).
+ */
+export async function deliverPrintDocument(
+  kind: "receipt" | "tags",
+  order: PrintOrder,
+  settings: PrintSettings | undefined,
+  tags: PrintTag[],
+  options: { pdf?: boolean; filename: string },
+): Promise<DocumentOutcome> {
+  const html = await buildLaundryPrintHtml(kind, order, settings, tags);
+  const logo = await imageDataUrl(
+    settings?.logoDataUrl?.startsWith("data:image/") ? settings.logoDataUrl : lndryBrand.mark,
+  );
+  return deliverDocument({
+    html,
+    pdf: Boolean(options.pdf),
+    filename: options.filename,
+    tags: kind === "tags" ? tags : undefined,
+    settings,
+    logoDataUrl: logo || undefined,
+  });
 }
 
 export async function buildLaundryCorrectionPrintHtml(
@@ -270,6 +213,6 @@ function documentHtml(
   extraCss = "",
 ) {
   return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)} · Epic Laundry</title><style>
-    @page{size:A4;margin:8mm}*{box-sizing:border-box}body{font-family:"Segoe UI",Arial,sans-serif;color:#17353c;margin:0;background:#fff}.${pageClass}{max-width:194mm;margin:0 auto;padding:2mm}.eyebrow{margin-top:8mm;color:#3a7d78;font-size:9px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}h1{font-size:23px;line-height:1.1;margin:3mm 0 1.5mm}.muted{color:#718087;font-size:11px;margin:0}header{display:flex;align-items:center;gap:10px;border-bottom:1px solid #c7d7d0;padding-bottom:4mm}header strong{display:block;font-size:20px;letter-spacing:-.02em}header small{display:block;color:#718087;font-size:9px;margin-top:2px}.brand-mark,.brand-fallback{width:34px;height:34px;object-fit:contain}.brand-fallback{display:grid;place-items:center;border-radius:9px;background:#123039;color:#f2c66d;font-weight:900}.line-items{margin-top:9mm;border-top:1px solid #d8e2dd}.line-items>div,.totals>div{display:flex;justify-content:space-between;gap:12px;padding:3mm 0;border-bottom:1px solid #e8eeeb;font-size:12px}.line-items small{display:block;color:#718087;font-size:10px;margin-top:1px}.totals{margin-top:6mm}.totals .grand{border-top:1.5px solid #123039;border-bottom:0;font-size:16px;padding-top:4mm}.tags{display:grid;grid-template-columns:repeat(2,1fr);gap:5mm;margin-top:7mm}.tag{height:84mm;border:1.2px dashed #78998f;border-radius:4mm;padding:5mm;display:flex;flex-direction:column;justify-content:space-between;break-inside:avoid;background:#fff}.tag-head,.tag-foot{display:flex;justify-content:space-between;gap:4mm;align-items:center}.brand-mini{font-size:9px;font-weight:900;letter-spacing:.12em;color:#39786f}.sequence{font-size:14px;font-weight:900;color:#123039}.tag-main{display:flex;align-items:center;justify-content:space-between;gap:3mm}.garment{font-size:17px;font-weight:800;line-height:1.12;max-width:45mm;overflow-wrap:anywhere}.service{font-size:11px;color:#39786f;margin-top:2mm}.order{font-size:10px;color:#617178;margin-top:4mm}.due{font-size:10px;font-weight:800;color:#855815;margin-top:2mm}.qr{width:25mm;height:25mm;image-rendering:pixelated}.tag-foot{border-top:1px solid #e4ebe6;padding-top:3mm;color:#617178;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:8px}.tag-foot span:last-child{font-family:"Segoe UI",Arial,sans-serif;font-weight:800;letter-spacing:.08em}blockquote{margin:10mm 0;padding:5mm;border-left:1.5mm solid #e6bc65;background:#f7faf7;line-height:1.6;font-size:14px}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}${extraCss}
+    @page{size:A4;margin:8mm}*{box-sizing:border-box}body{font-family:"Segoe UI",Arial,sans-serif;color:#17353c;margin:0;background:#fff}.${pageClass}{max-width:194mm;margin:0 auto;padding:2mm}.eyebrow{margin-top:8mm;color:#3a7d78;font-size:9px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}h1{font-size:23px;line-height:1.1;margin:3mm 0 1.5mm}.muted{color:#718087;font-size:11px;margin:0}header{display:flex;align-items:center;gap:10px;border-bottom:1px solid #c7d7d0;padding-bottom:4mm}header strong{display:block;font-size:20px;letter-spacing:-.02em}header small{display:block;color:#718087;font-size:9px;margin-top:2px}.brand-mark,.brand-fallback{width:34px;height:34px;object-fit:contain}.brand-fallback{display:grid;place-items:center;border-radius:9px;background:#123039;color:#f2c66d;font-weight:900}.line-items{margin-top:9mm;border-top:1px solid #d8e2dd}.line-items>div,.totals>div{display:flex;justify-content:space-between;gap:12px;padding:3mm 0;border-bottom:1px solid #e8eeeb;font-size:12px}.line-items small{display:block;color:#718087;font-size:10px;margin-top:1px}.totals{margin-top:6mm}.totals .grand{border-top:1.5px solid #123039;border-bottom:0;font-size:16px;padding-top:4mm}blockquote{margin:10mm 0;padding:5mm;border-left:1.5mm solid #e6bc65;background:#f7faf7;line-height:1.6;font-size:14px}@media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact}}${extraCss}
   </style></head><body><div class="${pageClass}">${body}</div></body></html>`;
 }

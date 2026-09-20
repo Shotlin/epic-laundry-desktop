@@ -11,18 +11,23 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
-import QRCode from "qrcode";
-import JsBarcode from "jsbarcode";
 import { apiGet, apiPost } from "@/lib/api";
 import type { LaundryOrder } from "@/lib/laundry";
 import {
-  buildLaundryPrintHtml,
+  deliverPrintDocument,
   type PrintOrder,
   type PrintSettings,
   type PrintTag,
 } from "@/lib/laundryPrint";
 import { formatINR } from "@/lib/utils";
 import VisualEmptyState from "@/components/laundry/VisualEmptyState";
+import { TagFormatBar, TagLabelPreview } from "@/components/laundry/TagFormatBar";
+import {
+  applyTagFormatOverride,
+  readTagFormatOverride,
+  writeTagFormatOverride,
+  type TagFormatOverride,
+} from "@/lib/tagFormats";
 
 type Detail = LaundryOrder &
   PrintOrder & {
@@ -77,6 +82,20 @@ export default function LaundryPrintCentre() {
     queryKey: ["print-centre-settings"],
     queryFn: () => apiGet<PrintSettings>("/laundry/print-settings"),
   });
+  // Label size / printer resolution belong to the printer on this computer: remembered here and applied
+  // over the saved template, so every tag print on this machine agrees.
+  const [formatOverride, setFormatOverride] = useState<TagFormatOverride | null>(readTagFormatOverride);
+  const printSettings = useMemo<PrintSettings>(
+    () => ({
+      ...(settings.data || {}),
+      tagTemplate: applyTagFormatOverride(settings.data?.tagTemplate, formatOverride),
+    }),
+    [settings.data, formatOverride],
+  );
+  function changeFormat(next: TagFormatOverride) {
+    setFormatOverride(next);
+    writeTagFormatOverride(next);
+  }
   const jobs = useQuery({
     queryKey: ["print-centre-history", selected],
     queryFn: () =>
@@ -102,51 +121,51 @@ export default function LaundryPrintCentre() {
   const allSelected =
     activeTags.length > 0 && selectedRows.length === activeTags.length;
 
-  async function runDocument(kind: "print" | "pdf") {
+  async function runDocument(kind: "print" | "pdf", scope: "all" | "selected" | "auto" = "auto") {
     if (!order) return;
     const receiptTab = tab === "invoice" || tab === "mini-invoice";
     const rows = receiptTab
       ? []
-      : selectedRows.length
-        ? selectedRows
-        : activeTags;
+      : scope === "all"
+        ? activeTags
+        : scope === "selected"
+          ? selectedRows
+          : selectedRows.length
+            ? selectedRows
+            : activeTags;
     const containerTab = tab === "bag-tags";
     const documentKind = receiptTab ? "receipt" : "tags";
-    const html = await buildLaundryPrintHtml(
-      documentKind,
-      order,
-      settings.data,
-      rows,
-    );
-    const result =
-      kind === "pdf"
-        ? await window.epic?.exportHtmlPdf?.(
-            html,
-            `${order.orderNumber}-${tab}`,
-          )
-        : await window.epic?.printHtml?.(html);
-    let ok = Boolean(result?.ok);
-    if (!result) {
-      const popup = window.open("", "_blank", "width=900,height=1100");
-      if (popup) {
-        popup.document.write(
-          html + "<script>window.onload=()=>window.print()<\/script>",
-        );
-        popup.document.close();
-        ok = true;
-      }
+    const template = printSettings.tagTemplate;
+    let outcome: { ok: boolean; evidence: string };
+    try {
+      // Tags go out in the order shown, first to last, as one batch — no per-tag re-selection.
+      outcome = await deliverPrintDocument(documentKind, order, printSettings, rows, {
+        pdf: kind === "pdf",
+        filename: `${order.orderNumber}-${tab}`,
+      });
+    } catch (cause) {
+      setNotice(cause instanceof Error ? `Could not prepare the ${kind === "pdf" ? "PDF" : "print"}: ${cause.message}` : "Could not prepare the document.");
+      return;
     }
+    const ok = outcome.ok;
+    const count = rows.length;
+    const noun = containerTab ? "bag tag" : "garment tag";
+    const sheet = template?.pageSize === "thermal" || template?.preset?.startsWith("mini") || template?.preset?.startsWith("thermal");
     setNotice(
-      ok
-        ? kind === "pdf"
-          ? "PDF saved from the same renderer used for preview."
-          : "Native print command accepted. Physical page emergence is not independently verified."
-        : "Print was cancelled or could not be started.",
+      !ok
+        ? "Print was cancelled or could not be started."
+        : receiptTab
+          ? kind === "pdf"
+            ? "Invoice document prepared."
+            : "Print dialog opened for the invoice."
+          : kind === "pdf"
+            ? `PDF downloaded — ${count} ${noun}${count === 1 ? "" : "s"}, Code 128 barcodes, ${sheet ? "one label per page" : "A4 sheet layout"}.`
+            : `${count} ${noun}${count === 1 ? "" : "s"} sent to the print dialog — ${sheet ? "each on its own label, in order" : "on A4 sheets"}. Physical output is not independently verified.`,
     );
     try {
       await apiPost("/laundry/print-jobs", {
         orderId: order.id,
-        templateId: "recommended-a4-6",
+        templateId: template?.preset || "recommended-a4-6",
         templateVersion: "1",
         printerProfile: settings.data?.printerProfile || "system-default",
         ...(containerTab
@@ -157,11 +176,7 @@ export default function LaundryPrintCentre() {
         documentType: tab,
         requestedCopies: 1,
         status: ok ? (kind === "pdf" ? "Downloaded" : "Printed") : "Cancelled",
-        evidence: ok
-          ? kind === "pdf"
-            ? "Electron printToPDF completed"
-            : "Native print command accepted; physical output not independently verified"
-          : "Operator cancelled or print command failed",
+        evidence: ok ? outcome.evidence : "Operator cancelled or print command failed",
       });
       jobs.refetch();
       allJobs.refetch();
@@ -229,13 +244,15 @@ export default function LaundryPrintCentre() {
             notice={notice}
             setNotice={setNotice}
             jobs={jobs.data || []}
-            settings={settings.data}
+            settings={printSettings}
+            formatOverride={formatOverride}
+            onFormatChange={changeFormat}
             selectedTags={selectedTags}
             selectedRows={selectedRows}
             allSelected={allSelected}
             setSelectedTags={setSelectedTags}
             onClose={() => setWorksetOpen(false)}
-            onPrint={() => void runDocument("print")}
+            onPrint={(scope) => void runDocument("print", scope)}
             onPdf={() => void runDocument("pdf")}
           />}
         </PrintWorksetDrawer>
@@ -261,7 +278,7 @@ function PageHeading() {
       </div>
       <div className="rounded-2xl border border-[#39786f]/20 bg-[#eaf3ef] px-4 py-3 text-xs font-semibold text-[#2e6a60]">
         <Tag className="mr-2 inline h-4 w-4" />
-        Opaque QR payloads · offline ready
+        Code 128 barcodes · mini-printer ready
       </div>
     </div>
   );
@@ -429,6 +446,8 @@ function DocumentWorkspace({
   setNotice,
   jobs,
   settings,
+  formatOverride,
+  onFormatChange,
   selectedTags,
   selectedRows,
   allSelected,
@@ -446,12 +465,14 @@ function DocumentWorkspace({
   setNotice: (value: string) => void;
   jobs: PrintJob[];
   settings?: PrintSettings;
+  formatOverride: TagFormatOverride | null;
+  onFormatChange: (next: TagFormatOverride) => void;
   selectedTags: string[];
   selectedRows: PrintTag[];
   allSelected: boolean;
   setSelectedTags: (value: string[]) => void;
   onClose: () => void;
-  onPrint: () => void;
+  onPrint: (scope: "all" | "selected") => void;
   onPdf: () => void;
 }) {
   const tabs: Array<[Tab, string]> = [
@@ -466,12 +487,7 @@ function DocumentWorkspace({
     tab === "invoice" ||
     tab === "mini-invoice" ||
     ((tab === "garment-tags" || tab === "bag-tags") && physicalTags.length > 0);
-  const printLabel =
-    tab === "invoice" || tab === "mini-invoice"
-      ? "Print invoice"
-      : selectedRows.length
-        ? "Print selected"
-        : "Print all";
+  const receiptTab = tab === "invoice" || tab === "mini-invoice";
   return (
     <>
       <header className="flex flex-wrap items-start justify-between gap-4">
@@ -499,23 +515,49 @@ function DocumentWorkspace({
           >
             <X className="h-4 w-4" />
           </button>
-          <button
-            type="button"
-            disabled={!canPrint}
-            onClick={onPrint}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[#123039] px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
-          >
-            <Printer className="h-3.5 w-3.5" />
-            {printLabel}
-          </button>
+          {receiptTab ? (
+            <button
+              type="button"
+              disabled={!canPrint}
+              onClick={() => onPrint("all")}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#123039] px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
+            >
+              <Printer className="h-3.5 w-3.5" />
+              Print invoice
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={!canPrint}
+                onClick={() => onPrint("all")}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#123039] px-3 py-2 text-xs font-bold text-white disabled:opacity-40"
+                title="Prints every tag of this order, first to last, as one batch"
+              >
+                <Printer className="h-3.5 w-3.5" />
+                Print all ({physicalTags.length})
+              </button>
+              <button
+                type="button"
+                disabled={!canPrint || selectedRows.length === 0}
+                onClick={() => onPrint("selected")}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[#123039]/25 bg-white px-3 py-2 text-xs font-bold text-[#17353c] disabled:opacity-40"
+                title="Prints only the tags you ticked"
+              >
+                <Printer className="h-3.5 w-3.5" />
+                Print selected ({selectedRows.length})
+              </button>
+            </>
+          )}
           <button
             type="button"
             disabled={!canPrint}
             onClick={onPdf}
             className="inline-flex items-center gap-1.5 rounded-lg border border-[#123039]/15 bg-white px-3 py-2 text-xs font-bold text-[#17353c] disabled:opacity-40"
+            title={receiptTab ? "Download this document" : selectedRows.length ? "Downloads the ticked tags as a barcode PDF" : "Downloads all tags as a barcode PDF"}
           >
             <Download className="h-3.5 w-3.5" />
-            Download PDF
+            Download PDF{!receiptTab && selectedRows.length ? ` (${selectedRows.length})` : ""}
           </button>
         </div>
       </header>
@@ -557,7 +599,9 @@ function DocumentWorkspace({
           <TagBatch
             kind={tab === "bag-tags" ? "container" : "garment"}
             tags={physicalTags}
-            template={settings?.tagTemplate}
+            settings={settings}
+            formatOverride={formatOverride}
+            onFormatChange={onFormatChange}
             selectedTags={selectedTags}
           selectedRows={selectedRows}
           allSelected={allSelected}
@@ -571,7 +615,9 @@ function DocumentWorkspace({
 function TagBatch({
   kind,
   tags,
-  template,
+  settings,
+  formatOverride,
+  onFormatChange,
   selectedTags,
   selectedRows,
   allSelected,
@@ -579,7 +625,9 @@ function TagBatch({
 }: {
   kind: "garment" | "container";
   tags: PrintTag[];
-  template: PrintSettings["tagTemplate"];
+  settings?: PrintSettings;
+  formatOverride: TagFormatOverride | null;
+  onFormatChange: (next: TagFormatOverride) => void;
   selectedTags: string[];
   selectedRows: PrintTag[];
   allSelected: boolean;
@@ -620,14 +668,22 @@ function TagBatch({
           </span>
         </div>
       </div>
+      {tags.length ? (
+        <TagFormatBar
+          settings={settings}
+          override={formatOverride}
+          onChange={onFormatChange}
+          sampleTag={tags[0]}
+        />
+      ) : null}
       <div className="mt-5 grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
         {tags.map((tag) => {
           const id = tag.containerId || tag.unitId || tag.tagNumber;
           return (
-              <TagPreview
+              <TagLabelPreview
                 key={id}
                 tag={tag}
-                template={template}
+                settings={settings}
                 selected={selectedTags.includes(id)}
               onToggle={() =>
                 setSelectedTags(
@@ -648,94 +704,6 @@ function TagBatch({
         </div>
       ) : null}
     </>
-  );
-}
-function TagPreview({
-  tag,
-  template,
-  selected,
-  onToggle,
-}: {
-  tag: PrintTag;
-  template: PrintSettings["tagTemplate"];
-  selected: boolean;
-  onToggle: () => void;
-}) {
-  const [qr, setQr] = useState("");
-  const [barcode, setBarcode] = useState("");
-  const codeFormat = template?.codeFormat || "qr";
-  const showQr = codeFormat === "qr" || codeFormat === "qr+code128";
-  const showBarcode = codeFormat === "code128" || codeFormat === "qr+code128";
-  useEffect(() => {
-    if (!showQr) {
-      setQr("");
-      return;
-    }
-    QRCode.toDataURL(
-      tag.tagPayload ||
-        `${tag.tagKind === "container" ? "ELB" : "ELT"}:v1:${tag.tagNumber}`,
-      { width: 160, margin: 1, errorCorrectionLevel: "M" },
-    )
-      .then(setQr)
-      .catch(() => setQr(""));
-  }, [showQr, tag.tagPayload, tag.tagNumber, tag.tagKind]);
-  useEffect(() => {
-    if (!showBarcode) {
-      setBarcode("");
-      return;
-    }
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    try {
-      JsBarcode(svg, tag.tagNumber, {
-        format: "CODE128",
-        displayValue: true,
-        width: 1.1,
-        height: 24,
-        margin: 0,
-        fontSize: 8,
-        lineColor: "#123039",
-      });
-      setBarcode(svg.outerHTML);
-    } catch {
-      setBarcode("");
-    }
-  }, [showBarcode, tag.tagNumber]);
-  const container = tag.tagKind === "container";
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className={`relative rounded-[18px] border bg-white p-4 text-left shadow-[0_8px_22px_rgba(37,48,43,.04)] transition hover:-translate-y-0.5 ${selected ? "border-[#3a7d78] ring-2 ring-[#b9ded6]" : "border-[#263f44]/10"}`}
-    >
-      <span
-        className={`absolute right-3 top-3 grid h-5 w-5 place-items-center rounded-md border ${selected ? "border-[#3a7d78] bg-[#3a7d78] text-white" : "border-[#b8c9c1] bg-white"}`}
-      >
-        {selected ? <Check className="h-3.5 w-3.5" /> : null}
-      </span>
-      <div className="flex items-center justify-between gap-3">
-        <span
-          className={`text-[10px] font-black uppercase tracking-[.14em] ${container ? "text-[#9b6d1d]" : "text-[#39786f]"}`}
-        >
-          {container ? "Epic Laundry · container" : "Epic Laundry"}
-        </span>
-        {template?.showSequence !== false ? <span className="font-mono text-sm font-bold text-[#17353c]">{tag.sequence} / {tag.total}</span> : null}
-      </div>
-      <div className="mt-5 flex items-end justify-between gap-4">
-        <div className="min-w-0">
-          {template?.showGarment !== false ? <p className="text-lg font-extrabold leading-tight text-[#17353c]">{tag.garment}</p> : null}
-          {template?.showService !== false ? <p className="mt-1 text-xs font-semibold text-[#39786f]">{tag.service}</p> : null}
-          {template?.showOrder !== false || template?.showCustomer !== false ? <p className="mt-4 truncate text-[11px] text-[#617178]">{template?.showOrder !== false ? tag.orderNumber : ""}{template?.showOrder !== false && template?.showCustomer !== false ? " · " : ""}{template?.showCustomer !== false ? tag.customer.split(" ")[0] : ""}</p> : null}
-          {template?.showDueDate !== false ? <p className="mt-1 text-[10px] font-bold uppercase tracking-[.1em] text-[#855815]">Due {tag.expectedDeliveryDate}</p> : null}
-        </div>
-        {qr ? (
-          <img src={qr} alt="Opaque tag QR" className="h-20 w-20 shrink-0" />
-        ) : showQr ? (
-          <span className="h-20 w-20 shrink-0 rounded-lg bg-[#f4f6f1]" />
-        ) : null}
-      </div>
-      {barcode ? <div aria-label="Barcode preview" className="mt-3 overflow-hidden border-t border-[#e4ebe6] pt-2" dangerouslySetInnerHTML={{ __html: barcode }} /> : null}
-      {template?.showTagCode !== false || tag.state ? <div className="mt-4 flex justify-between border-t border-[#e4ebe6] pt-3 font-mono text-[9px] text-[#718087]"><span>{template?.showTagCode !== false ? tag.tagNumber : ""}</span><span>{tag.state || "Intake"}</span></div> : null}
-    </button>
   );
 }
 function InvoicePreview({

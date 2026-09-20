@@ -15,8 +15,9 @@ import {
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { apiGet, apiPost, operatorErrorMessage } from "@/lib/api";
+import { withTagFormatOverride } from "@/lib/tagFormats";
 import {
-  buildLaundryPrintHtml,
+  deliverPrintDocument,
   type PrintOrder,
   type PrintSettings,
   type PrintTag,
@@ -573,19 +574,14 @@ async function printTagForUnit(
     throw new Error(
       "The active tag is not available in the selected order print set.",
     );
-  const html = await buildLaundryPrintHtml("tags", order, settings, [tag]);
-  const result = await window.epic?.printHtml?.(html);
-  let ok = Boolean(result?.ok);
-  if (!result) {
-    const popup = window.open("", "_blank", "width=900,height=1100");
-    if (popup) {
-      popup.document.write(
-        `${html}<script>window.onload=()=>window.print()<\/script>`,
-      );
-      popup.document.close();
-      ok = true;
-    }
-  }
+  const outcome = await deliverPrintDocument(
+    "tags",
+    order,
+    withTagFormatOverride(settings),
+    [tag],
+    { filename: `${order.orderNumber}-${tag.tagNumber}` },
+  ).catch(() => ({ ok: false, evidence: "The tag could not be prepared" }));
+  const ok = outcome.ok;
   let auditRecorded = false;
   try {
     await apiPost("/laundry/print-jobs", {

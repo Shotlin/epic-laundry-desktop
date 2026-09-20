@@ -7,7 +7,8 @@ import { useVendorAccess } from '@/lib/vendorAccess'
 import { garmentVisuals, generatedVisualManifest } from '@/assets/generated/manifest'
 import type { LaundryCatalogue, LaundryQuote } from '@/lib/laundry'
 import { cn, formatINR, localDateKey } from '@/lib/utils'
-import { buildLaundryPrintHtml, type PrintOrder, type PrintSettings } from '@/lib/laundryPrint'
+import { deliverPrintDocument, type PrintOrder, type PrintSettings } from '@/lib/laundryPrint'
+import { withTagFormatOverride } from '@/lib/tagFormats'
 
 type CartLine = { garment: string; service: string; qty: number }
 type Customer = { id: string; name: string; phone: string; email?: string; address?: string }
@@ -408,11 +409,10 @@ async function printBookingDocuments(result: BookingResult, kind: 'tags' | 'bag-
   const settings = await apiGet<PrintSettings>('/laundry/print-settings').catch(() => ({} as PrintSettings))
   const order: PrintOrder = { id: result.order?.id || result.receipt.orderNumber, orderNumber: result.receipt.orderNumber, invoiceNumber: result.receipt.invoiceNumber, customer: result.receipt.customer, expectedDeliveryDate: result.receipt.expectedDeliveryDate, fulfillmentMode: result.receipt.fulfillmentMode, receipt: result.receipt }
   const physicalTags = kind === 'bag-tags' ? result.containerTags || [] : result.tags
-  const html = await buildLaundryPrintHtml(kind === 'receipt' ? 'receipt' : 'tags', order, settings, physicalTags)
-  let ok = false
-  if (pdf && window.epic?.exportHtmlPdf) ok = Boolean((await window.epic.exportHtmlPdf(html, `${result.receipt.orderNumber}-${kind}`)).ok)
-  else if (!pdf && window.epic?.printHtml) ok = Boolean((await window.epic.printHtml(html)).ok)
-  else { const popup = window.open('', '_blank', 'width=900,height=1100'); if (popup) { popup.document.write(html + '<script>window.onload=()=>window.print()<\/script>'); popup.document.close(); ok = true } }
+  // Label size / printer resolution for this computer's printer (set in the Print Centre) apply here too;
+  // a whole batch goes out as one job, label after label in order.
+  const outcome = await deliverPrintDocument(kind === 'receipt' ? 'receipt' : 'tags', order, withTagFormatOverride(settings), physicalTags, { pdf, filename: `${result.receipt.orderNumber}-${kind}` }).catch(() => ({ ok: false, evidence: 'The document could not be prepared' }))
+  const ok = outcome.ok
   let auditRecorded = false
   try { await apiPost('/laundry/print-jobs', { orderId: result.order?.id || result.receipt.orderNumber, templateId: 'recommended-a4-6', templateVersion: '1', ...(kind === 'bag-tags' ? { containerIds: physicalTags.map((tag) => tag.containerId || tag.tagNumber) } : kind === 'tags' ? { tagIds: physicalTags.map((tag) => tag.tagNumber) } : {}), documentType: kind, requestedCopies: 1, status: ok ? (pdf ? 'Downloaded' : 'Printed') : 'Cancelled', evidence: ok ? (pdf ? 'Electron printToPDF completed' : 'Native print command accepted; physical output not independently verified') : 'Operator cancelled or print command failed' }); auditRecorded = true } catch { /* the booking itself is already committed; the caller reports the missing audit record */ }
   return { ok, auditRecorded }

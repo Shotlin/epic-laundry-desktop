@@ -18,17 +18,15 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import QRCode from "qrcode";
+import { TagLabelPreview } from "@/components/laundry/TagFormatBar";
+import { PRINTER_DPI_OPTIONS, TAG_FORMATS, findTagFormat } from "@/lib/tagFormats";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 
 type TagTemplate = {
-  preset:
-    | "a4-4"
-    | "a4-6"
-    | "a4-8"
-    | "a4-10"
-    | "thermal-50.8x51.4"
-    | "thermal-50x25"
-    | "custom";
+  /** One of the formats in lib/tagFormats.ts, or "custom". */
+  preset: string;
+  /** Printer resolution the barcode is sized for (203 typical thermal, 300, 600). */
+  printDpi: number;
   widthMm: number;
   heightMm: number;
   columns: number;
@@ -38,7 +36,8 @@ type TagTemplate = {
   marginMm: number;
   fontScale: number;
   lineSpacing: number;
-  codeFormat: "qr" | "code128" | "qr+code128";
+  /** Garment / bag tags always print a Code 128 barcode. */
+  codeFormat: "code128";
   showLogo: boolean;
   showGarment: boolean;
   showService: boolean;
@@ -330,7 +329,8 @@ const defaultTagTemplate: TagTemplate = {
   marginMm: 8,
   fontScale: 1,
   lineSpacing: 1,
-  codeFormat: "qr",
+  codeFormat: "code128",
+  printDpi: 300,
   showLogo: true,
   showGarment: true,
   showService: true,
@@ -494,6 +494,8 @@ export default function LaundrySettings() {
         tagTemplate: {
           ...defaultTagTemplate,
           ...(settings.data.tagTemplate || {}),
+          // Templates saved before barcodes replaced QR still say "qr" — tags are always Code 128 now.
+          codeFormat: "code128",
         },
         stationCapacities: {
           ...defaultStationCapacities,
@@ -1652,6 +1654,7 @@ export default function LaundrySettings() {
       {activeArea === "printing-setup" ? <div id="settings-panel-printing-setup" role="tabpanel" aria-labelledby="settings-tab-printing-setup" className="mt-6 space-y-6">
         <div id="printing-setup" className="scroll-mt-24">
           <TagTemplateConfiguratorV2
+            businessName={form.businessName}
             value={form.tagTemplate}
             onChange={(tagTemplate) => setForm({ ...form, tagTemplate })}
             onSave={() => save.mutate()}
@@ -1895,73 +1898,55 @@ function PrinterProfileManager({
   );
 }
 
+const SAMPLE_TAG = {
+  tagNumber: "ELT-20260830-A1B2C3",
+  tagKind: "garment" as const,
+  orderNumber: "LND-260830-0001",
+  invoiceNumber: "INV-0001",
+  customer: "Asha Kumar",
+  customerPhone: "+91 98765 43210",
+  garment: "Cotton Shirt",
+  service: "Wash & Steam Iron",
+  category: "Men's Wear",
+  sequence: 1,
+  total: 3,
+  orderDate: "2026-08-30",
+  expectedDeliveryDate: "2026-09-02",
+  notes: "Handle with care",
+  express: true,
+  specialCare: false,
+  state: "INTAKE",
+};
+
 function TagTemplateConfiguratorV2({
   value,
   onChange,
   onSave,
   saving,
+  businessName,
 }: {
   value: TagTemplate;
   onChange: (value: TagTemplate) => void;
   onSave: () => void;
   saving: boolean;
+  businessName?: string;
 }) {
   const presets: Array<{
-    id: TagTemplate["preset"];
+    id: string;
     label: string;
     width: number;
     height: number;
     columns: number;
     rows: number;
   }> = [
-    {
-      id: "a4-4",
-      label: "A4 · 4-up",
-      width: 96,
-      height: 130,
-      columns: 2,
-      rows: 2,
-    },
-    {
-      id: "a4-6",
-      label: "A4 · 6-up",
-      width: 96,
-      height: 84,
-      columns: 2,
-      rows: 3,
-    },
-    {
-      id: "a4-8",
-      label: "A4 · 8-up",
-      width: 96,
-      height: 63,
-      columns: 2,
-      rows: 4,
-    },
-    {
-      id: "a4-10",
-      label: "A4 · 10-up",
-      width: 88,
-      height: 52,
-      columns: 2,
-      rows: 5,
-    },
-    {
-      id: "thermal-50.8x51.4",
-      label: "Thermal · 50.8 × 51.4 mm",
-      width: 50.8,
-      height: 51.4,
-      columns: 1,
-      rows: 1,
-    },
-    {
-      id: "thermal-50x25",
-      label: "Thermal · 50 × 25 mm",
-      width: 50,
-      height: 25,
-      columns: 1,
-      rows: 1,
-    },
+    ...TAG_FORMATS.map((format) => ({
+      id: format.id,
+      label: format.label,
+      width: format.widthMm,
+      height: format.heightMm,
+      columns: format.columns,
+      rows: format.rows,
+    })),
     {
       id: "custom",
       label: "Custom",
@@ -2021,13 +2006,15 @@ function TagTemplateConfiguratorV2({
                 const preset = presets.find(
                   (item) => item.id === event.target.value,
                 )!;
+                const format = findTagFormat(preset.id);
                 update({
                   preset: preset.id,
                   widthMm: preset.width,
                   heightMm: preset.height,
                   columns: preset.columns,
                   rows: preset.rows,
-                  pageSize: preset.id.startsWith("thermal") ? "thermal" : "A4",
+                  pageSize: format ? (format.kind === "a4" ? "A4" : "thermal") : value.pageSize,
+                  printDpi: format ? format.dpi : value.printDpi,
                 });
               }}
               className="mt-1.5 h-10 w-full rounded-xl border border-[#17363e]/15 bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#3a7d78]"
@@ -2125,26 +2112,31 @@ function TagTemplateConfiguratorV2({
               onChange={(lineSpacing) => update({ lineSpacing })}
             />
           </div>
-          <label className="block text-sm font-semibold text-[#31484d]">
-            Code format
-            <select
-              value={value.codeFormat}
-              onChange={(event) =>
-                update({
-                  codeFormat: event.target.value as TagTemplate["codeFormat"],
-                })
-              }
-              className="mt-1.5 h-10 w-full rounded-xl border border-[#17363e]/15 bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#3a7d78]"
-            >
-              <option value="qr">
-                QR only · opaque payload + readable tag footer
-              </option>
-              <option value="code128">Barcode + human-readable code</option>
-              <option value="qr+code128">
-                QR + barcode + human-readable code
-              </option>
-            </select>
-          </label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="text-sm font-semibold text-[#31484d]">
+              Code
+              <p className="mt-1.5 flex h-10 items-center rounded-xl bg-[#f5f7f3] px-3 text-sm font-medium text-[#526368]">
+                Code 128 barcode + human-readable tag code
+              </p>
+            </div>
+            <label className="block text-sm font-semibold text-[#31484d]">
+              Printer resolution
+              <select
+                value={value.printDpi}
+                onChange={(event) => update({ printDpi: Number(event.target.value) })}
+                className="mt-1.5 h-10 w-full rounded-xl border border-[#17363e]/15 bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#3a7d78]"
+              >
+                {PRINTER_DPI_OPTIONS.map((dpi) => (
+                  <option key={dpi} value={dpi}>
+                    {dpi} dpi{dpi === 203 ? " · typical thermal label printer" : dpi === 300 ? " · laser / high-res thermal" : ""}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-1 block text-[10px] font-normal leading-4 text-[#718087]">
+                Bars are sized to whole printer dots so the barcode stays scannable. The Print Centre can override this for the printer on each computer.
+              </span>
+            </label>
+          </div>
           <fieldset>
             <legend className="text-sm font-semibold text-[#31484d]">
               Printed fields
@@ -2192,94 +2184,16 @@ function TagTemplateConfiguratorV2({
           <p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#4d8982]">
             Live preview
           </p>
-          <div
-            className="mt-3 rounded-lg border border-[#78998f] bg-white p-3"
-            style={{
-              aspectRatio: `${Math.max(value.widthMm, 1)} / ${Math.max(value.heightMm, 1)}`,
-              fontSize: `${value.fontScale}em`,
-              lineHeight: value.lineSpacing,
-            }}
-          >
-            <div className="flex items-center justify-between text-[8px] font-black uppercase tracking-wider text-[#39786f]">
-              <span className="flex items-center gap-1">
-                {value.showLogo ? (
-                  <span className="grid h-4 w-4 place-items-center rounded bg-[#123039] text-[6px] text-[#f1ca75]">
-                    EL
-                  </span>
-                ) : null}
-                {value.showStoreName ? "Epic Laundry" : "Tag preview"}
-              </span>
-              {value.showSequence ? <span>1 / 3</span> : null}
-            </div>
-            <div className="mt-3 flex items-end justify-between gap-2">
-              <div>
-                {value.showGarment ? (
-                  <p className="text-sm font-extrabold text-[#17353c]">
-                    Cotton shirt
-                  </p>
-                ) : null}
-                {value.showService ? (
-                  <p className="mt-1 text-[9px] text-[#39786f]">Wash & fold</p>
-                ) : null}
-                {value.showOrder ? (
-                  <p className="mt-2 text-[8px] text-[#718087]">
-                    EL-20260830-0001
-                  </p>
-                ) : null}
-                {value.showInvoiceNumber ? (
-                  <p className="text-[8px] text-[#718087]">INV-0001</p>
-                ) : null}
-                {value.showOrderDate ? (
-                  <p className="text-[8px] text-[#718087]">30 AUG 2026</p>
-                ) : null}
-                {value.showCustomer ? (
-                  <p className="text-[8px] text-[#718087]">Asha Kumar</p>
-                ) : null}
-                {value.showPhone ? (
-                  <p className="text-[8px] text-[#718087]">+91 98765 43210</p>
-                ) : null}
-                {value.showDueDate ? (
-                  <p className="mt-1 text-[8px] font-bold text-[#855815]">
-                    DUE 02 SEP
-                  </p>
-                ) : null}
-                {value.showNotes ? (
-                  <p className="mt-1 text-[8px] text-[#855815]">
-                    Handle with care
-                  </p>
-                ) : null}
-                {value.showExpress ? (
-                  <span className="mr-1 inline-block rounded bg-[#fff0c7] px-1 text-[7px] font-bold text-[#855815]">
-                    EXPRESS
-                  </span>
-                ) : null}
-                {value.showSpecialCare ? (
-                  <span className="inline-block rounded bg-[#fbe8e8] px-1 text-[7px] font-bold text-[#a54d4d]">
-                    SPECIAL CARE
-                  </span>
-                ) : null}
-              </div>
-              {value.codeFormat !== "code128" ? (
-                <div className="grid h-12 w-12 place-items-center border-4 border-[#17353c] text-[7px] font-black text-[#17353c]">
-                  QR
-                </div>
-              ) : null}
-            </div>
-            {value.showTagCode ? (
-              <p className="mt-3 border-t border-[#e4ebe6] pt-2 font-mono text-[8px] text-[#617178]">
-                ELT-20260830-000001
-              </p>
-            ) : null}
-            {value.codeFormat !== "qr" ? (
-              <p className="mt-1 text-[7px] tracking-[.18em] text-[#17353c]">
-                ▌▌▌ ▌▌ ▌▌▌ ▌▌
-              </p>
-            ) : null}
+          <div className="mt-3">
+            <TagLabelPreview
+              tag={SAMPLE_TAG}
+              settings={{ businessName: businessName || "Epic Laundry", tagTemplate: value }}
+              selected={false}
+              onToggle={() => undefined}
+            />
           </div>
           <p className="mt-3 text-[10px] leading-4 text-[#718087]">
-            {value.widthMm} × {value.heightMm} mm · {value.columns} ×{" "}
-            {value.rows} grid · {value.orientation} ·{" "}
-            {value.codeFormat.toUpperCase()}
+            {value.widthMm} × {value.heightMm} mm · {value.columns} × {value.rows} grid · Code 128 · {value.printDpi} dpi
           </p>
         </div>
       </div>
@@ -2287,288 +2201,6 @@ function TagTemplateConfiguratorV2({
   );
 }
 
-function TagTemplateConfiguratorLegacy({
-  value,
-  onChange,
-  onSave,
-  saving,
-}: {
-  value: TagTemplate;
-  onChange: (value: TagTemplate) => void;
-  onSave: () => void;
-  saving: boolean;
-}) {
-  const presets: Array<{
-    id: TagTemplate["preset"];
-    label: string;
-    width: number;
-    height: number;
-    columns: number;
-    rows: number;
-  }> = [
-    {
-      id: "a4-4",
-      label: "A4 · 4-up",
-      width: 96,
-      height: 130,
-      columns: 2,
-      rows: 2,
-    },
-    {
-      id: "a4-6",
-      label: "A4 · 6-up",
-      width: 96,
-      height: 84,
-      columns: 2,
-      rows: 3,
-    },
-    {
-      id: "a4-8",
-      label: "A4 · 8-up",
-      width: 96,
-      height: 63,
-      columns: 2,
-      rows: 4,
-    },
-    {
-      id: "a4-10",
-      label: "A4 · 10-up",
-      width: 88,
-      height: 52,
-      columns: 2,
-      rows: 5,
-    },
-    {
-      id: "thermal-50.8x51.4",
-      label: "Thermal · 50.8 × 51.4 mm",
-      width: 50.8,
-      height: 51.4,
-      columns: 1,
-      rows: 1,
-    },
-    {
-      id: "thermal-50x25",
-      label: "Thermal · 50 × 25 mm",
-      width: 50,
-      height: 25,
-      columns: 1,
-      rows: 1,
-    },
-    {
-      id: "custom",
-      label: "Custom",
-      width: value.widthMm,
-      height: value.heightMm,
-      columns: value.columns,
-      rows: value.rows,
-    },
-  ];
-  const update = (next: Partial<TagTemplate>) =>
-    onChange({ ...value, ...next });
-  return (
-    <section className="mt-5 rounded-[22px] border border-[#263f44]/10 bg-white p-6 shadow-[0_8px_28px_rgba(37,48,43,.04)]">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-[.15em] text-[#4d8982]">
-            Physical document control
-          </p>
-          <h2 className="mt-1 font-serif text-xl text-[#17353c]">
-            Tag template configurator
-          </h2>
-          <p className="mt-1 max-w-2xl text-xs leading-5 text-[#617178]">
-            Choose a paper or thermal profile, control the fields printed on
-            every tag, and save one branch-scoped template. Preview dimensions
-            are physical millimetres; printer connection is still verified
-            separately.
-          </p>
-        </div>
-        <span className="rounded-full bg-[#eaf3ef] px-3 py-1.5 text-xs font-bold text-[#2e6a60]">
-          Owner controlled
-        </span>
-      </div>
-      <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_240px]">
-        <div className="space-y-4">
-          <label className="block text-sm font-semibold text-[#31484d]">
-            Preset
-            <select
-              value={value.preset}
-              onChange={(event) => {
-                const preset = presets.find(
-                  (item) => item.id === event.target.value,
-                )!;
-                update({
-                  preset: preset.id,
-                  widthMm: preset.width,
-                  heightMm: preset.height,
-                  columns: preset.columns,
-                  rows: preset.rows,
-                });
-              }}
-              className="mt-1.5 h-10 w-full rounded-xl border border-[#17363e]/15 bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#3a7d78]"
-            >
-              {presets.map((preset) => (
-                <option key={preset.id} value={preset.id}>
-                  {preset.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="grid gap-3 sm:grid-cols-4">
-            <NumberField
-              label="Width mm"
-              value={value.widthMm}
-              disabled={value.preset !== "custom"}
-              onChange={(widthMm) => update({ preset: "custom", widthMm })}
-            />
-            <NumberField
-              label="Height mm"
-              value={value.heightMm}
-              disabled={value.preset !== "custom"}
-              onChange={(heightMm) => update({ preset: "custom", heightMm })}
-            />
-            <NumberField
-              label="Columns"
-              value={value.columns}
-              min={1}
-              max={6}
-              disabled={value.preset !== "custom"}
-              onChange={(columns) => update({ preset: "custom", columns })}
-            />
-            <NumberField
-              label="Rows"
-              value={value.rows}
-              min={1}
-              max={12}
-              disabled={value.preset !== "custom"}
-              onChange={(rows) => update({ preset: "custom", rows })}
-            />
-          </div>
-          <label className="block text-sm font-semibold text-[#31484d]">
-            Code format
-            <select
-              value={value.codeFormat}
-              onChange={(event) =>
-                update({
-                  codeFormat: event.target.value as TagTemplate["codeFormat"],
-                })
-              }
-              className="mt-1.5 h-10 w-full rounded-xl border border-[#17363e]/15 bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#3a7d78]"
-            >
-              <option value="qr">QR only · opaque payload</option>
-              <option value="code128">
-                Code 128 line + human-readable code
-              </option>
-              <option value="qr+code128">QR + Code 128 line</option>
-            </select>
-          </label>
-          <fieldset>
-            <legend className="text-sm font-semibold text-[#31484d]">
-              Printed fields
-            </legend>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              {(
-                [
-                  ["showSequence", "Order-wide sequence"],
-                  ["showOrder", "Order number"],
-                  ["showCustomer", "Customer name"],
-                  ["showDueDate", "Due date"],
-                ] as const
-              ).map(([key, label]) => (
-                <label
-                  key={key}
-                  className="flex items-center gap-2 rounded-lg bg-[#f5f7f3] px-3 py-2 text-xs font-medium text-[#526368]"
-                >
-                  <input
-                    type="checkbox"
-                    checked={value[key]}
-                    onChange={(event) =>
-                      update({ [key]: event.target.checked })
-                    }
-                    className="accent-[#3a7d78]"
-                  />
-                  {label}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => onChange(defaultTagTemplate)}
-              className="rounded-lg border border-[#263f44]/15 bg-white px-3 py-2 text-xs font-bold text-[#617178]"
-            >
-              Reset defaults
-            </button>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={onSave}
-              className="inline-flex items-center gap-2 rounded-lg bg-[#123039] px-3 py-2 text-xs font-bold text-white disabled:opacity-50"
-            >
-              <Save className="h-3.5 w-3.5" />
-              {saving ? "Saving…" : "Save tag template"}
-            </button>
-          </div>
-        </div>
-        <div className="rounded-xl border border-dashed border-[#9cb5ac] bg-[#fbfcf9] p-4">
-          <p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#4d8982]">
-            Live preview
-          </p>
-          <div
-            className="mt-3 rounded-lg border border-[#78998f] bg-white p-3"
-            style={{
-              aspectRatio: `${Math.max(value.widthMm, 1)} / ${Math.max(value.heightMm, 1)}`,
-            }}
-          >
-            <div className="flex items-center justify-between text-[8px] font-black uppercase tracking-wider text-[#39786f]">
-              <span>Epic Laundry</span>
-              {value.showSequence ? <span>1 / 3</span> : null}
-            </div>
-            <div className="mt-3 flex items-end justify-between gap-2">
-              <div>
-                <p className="text-sm font-extrabold text-[#17353c]">
-                  Cotton shirt
-                </p>
-                <p className="mt-1 text-[9px] text-[#39786f]">Wash & fold</p>
-                {value.showOrder ? (
-                  <p className="mt-2 text-[8px] text-[#718087]">
-                    EL-20260830-0001
-                  </p>
-                ) : null}
-                {value.showCustomer ? (
-                  <p className="text-[8px] text-[#718087]">Asha Kumar</p>
-                ) : null}
-                {value.showDueDate ? (
-                  <p className="mt-1 text-[8px] font-bold text-[#855815]">
-                    DUE 02 SEP
-                  </p>
-                ) : null}
-              </div>
-              {value.codeFormat !== "code128" ? (
-                <div className="grid h-12 w-12 place-items-center border-4 border-[#17353c] text-[7px] font-black text-[#17353c]">
-                  QR
-                </div>
-              ) : null}
-            </div>
-            <p className="mt-3 border-t border-[#e4ebe6] pt-2 font-mono text-[8px] text-[#617178]">
-              ELT-20260830-000001
-            </p>
-            {value.codeFormat !== "qr" ? (
-              <p className="mt-1 text-[7px] tracking-[.18em] text-[#17353c]">
-                ▌▌▌ ▌▌ ▌▌▌ ▌▌
-              </p>
-            ) : null}
-          </div>
-          <p className="mt-3 text-[10px] leading-4 text-[#718087]">
-            {value.widthMm} × {value.heightMm} mm · {value.columns} ×{" "}
-            {value.rows} grid · {value.codeFormat.toUpperCase()}
-          </p>
-        </div>
-      </div>
-    </section>
-  );
-}
 function NumberField({
   label,
   value,
