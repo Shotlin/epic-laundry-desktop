@@ -73,6 +73,7 @@ type Detail = {
   units: Array<{ id: string; tagCode: string; sequence: number; itemIndex: number; state: string; location: string; condition: string; garmentName: string; createdAt: string; updatedAt: string }>
   containers: Array<{ id: string; tagCode: string; sequence: number; total: number; weightKg: number | null; state: string; location: string; condition: string; createdAt: string; updatedAt: string; deliveredAt?: string }>
   payments: Array<{ id: string; amountPaise: number; mode: string; reference: string | null; createdAt: string }>
+  history?: Array<{ id: string; from: string | null; to: string; note: string | null; by: string | null; at: string }>
 }
 
 const titleCase = (value: string) => value.charAt(0) + value.slice(1).toLowerCase()
@@ -123,8 +124,13 @@ function detailShape(detail: Detail) {
     tags,
     timeline: [
       { id: `${base.id}:booked`, ts: base.createdAt, action: `Order booked at the counter` },
+      // Every status change, exactly as the backend recorded it (who moved it, and any override they used).
+      ...(detail.history || []).filter((event) => event.from).map((event) => ({
+        id: event.id, ts: event.at,
+        action: `Status changed: ${STATE_LABEL[event.from || ''] || event.from} → ${STATE_LABEL[event.to] || event.to}${event.by ? ` by ${event.by}` : ''}${event.note ? ` (${event.note})` : ''}`,
+      })),
       ...detail.payments.map((payment) => ({ id: payment.id, ts: payment.createdAt, action: `${MODE_LABEL[payment.mode] || payment.mode} payment of ₹${rupees(payment.amountPaise).toFixed(2)} recorded` })),
-    ],
+    ].sort((a, b) => String(a.ts).localeCompare(String(b.ts))),
   }
 }
 
@@ -182,7 +188,10 @@ route('GET', '/laundry/orders', async ({ get, query }) => {
 route('GET', '/laundry/orders/:id', async ({ get, params }) => detailShape(await get(`/vendor/counter/orders/${params.id}`)))
 
 route('POST', '/laundry/orders/:id/transition', async ({ post, params, body }) => {
-  const result = await post(`/vendor/counter/orders/${params.id}/transition`, { state: stateToWire(body.state), version: body.expectedVersion })
+  const result = await post(`/vendor/counter/orders/${params.id}/transition`, {
+    state: stateToWire(body.state), version: body.expectedVersion,
+    ...(body.allowIncomplete ? { allowIncomplete: true } : {}), ...(body.allowUnpaid ? { allowUnpaid: true } : {}),
+  })
   return laundryOrder(result.order)
 })
 
@@ -238,7 +247,12 @@ route('GET', '/laundry/customers/remote-lookup', async ({ post, query }) => {
   try {
     const found = await post('/vendor/customers/resolve-phone', { phone })
     return found?.userId ? { match: { userId: found.userId as string, name: (found.name as string) || undefined, phone } } : { match: null }
-  } catch { return { match: null } }
+  } catch (error) {
+    // Only "no LNDRY account for this number" means no match. Anything else (the vendor's type just changed, a rate
+    // limit, a network blip) is an ERROR, not an answer — it must not be cached as "no such customer".
+    if ((error as { code?: string })?.code === 'NOT_FOUND') return { match: null }
+    throw error
+  }
 })
 
 route('POST', '/laundry/customers/adopt-remote', async ({ body }) => ({ id: body.userId as string, name: (body.name as string) || '', phone: onlyDigits(body.phone), email: '', address: '' }))

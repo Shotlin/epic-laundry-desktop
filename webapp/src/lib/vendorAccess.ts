@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
+import { useEffect } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiGet } from '@/lib/api'
 import { isWebOnly } from '@/lib/cloudAuth'
 
@@ -27,15 +28,24 @@ const UNRESTRICTED: VendorAccess = { vendorType: null, appSync: true, walletAcce
  * hidden. This only decides what the screen offers; the backend refuses the calls regardless.
  */
 export function useVendorAccess(): VendorAccess {
+  const queryClient = useQueryClient()
   const query = useQuery({
     queryKey: ['vendor-access'],
     queryFn: () => apiGet<{ vendorType: VendorType; appSync: boolean; walletAccess: boolean }>('/vendor/counter/access'),
     enabled: isWebOnly,
     staleTime: 15_000,
     refetchOnWindowFocus: 'always',
-    refetchInterval: 5 * 60_000,
+    refetchInterval: 60_000,
     retry: 1,
   })
+  // When the vendor's type changes, whatever was looked up under the OLD type (a wallet balance, a "no such
+  // LNDRY customer" answer, an error) is stale — drop it so the next search asks the backend again.
+  const kind = query.data ? `${query.data.vendorType}:${query.data.appSync}:${query.data.walletAccess}` : ''
+  useEffect(() => {
+    if (!kind) return
+    void queryClient.invalidateQueries({ queryKey: ['wallet-balance'] })
+    void queryClient.invalidateQueries({ queryKey: ['laundry-customers-remote'] })
+  }, [kind, queryClient])
   if (!isWebOnly) return UNRESTRICTED
   if (!query.data) return NOT_CONNECTED
   return { vendorType: query.data.vendorType, appSync: Boolean(query.data.appSync), walletAccess: Boolean(query.data.walletAccess), loaded: true }

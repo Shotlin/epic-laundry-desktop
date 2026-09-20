@@ -42,6 +42,7 @@ import {
 import { cn, formatINR, formatMoney } from "@/lib/utils";
 import OrderItemEditor from "@/components/laundry/OrderItemEditor";
 import VisualEmptyState from "@/components/laundry/VisualEmptyState";
+import { OrderStatusDialog, type StatusMove, type StatusOverride } from "@/components/laundry/OrderStatusDialog";
 
 const states: Array<LaundryState | "all"> = [
   "all",
@@ -138,27 +139,34 @@ function StoreOrdersCustomersWorkspace() {
     enabled: view === "customers",
     staleTime: 30_000,
   });
+  // Every status change: confirm first, then the backend; success is announced only after the backend says so,
+  // the row is patched from the backend's own answer, and a refusal stays in the dialog.
+  const [statusMove, setStatusMove] = useState<StatusMove | null>(null);
+  const [statusNotice, setStatusNotice] = useState("");
   const transition = useMutation({
-    mutationFn: ({
-      id,
-      next,
-      expectedVersion,
-    }: {
-      id: string;
-      next: LaundryState;
-      expectedVersion?: number;
-    }) =>
-      apiPost<LaundryOrder>(`/laundry/orders/${id}/transition`, {
-        state: next,
-        expectedVersion,
+    mutationFn: ({ move, override }: { move: StatusMove; override?: StatusOverride }) =>
+      apiPost<LaundryOrder>(`/laundry/orders/${move.order.id}/transition`, {
+        state: move.next,
+        expectedVersion: move.order.version,
+        ...override,
       }),
-    onSuccess: () => {
+    onSuccess: (updated, { move }) => {
+      client.setQueriesData<OrderPage>({ queryKey: ["laundry-orders"] }, (page) =>
+        page ? { ...page, items: page.items.map((row) => (row.id === updated.id ? { ...row, ...updated } : row)) } : page,
+      );
       client.invalidateQueries({ queryKey: ["laundry-orders"] });
       client.invalidateQueries({ queryKey: ["laundry-order"] });
       client.invalidateQueries({ queryKey: ["laundry-dashboard"] });
       client.invalidateQueries({ queryKey: ["laundry-dispatch"] });
+      setStatusMove(null);
+      setStatusNotice(`Order ${updated.orderNumber || move.order.orderNumber} is now ${updated.state}.`);
     },
   });
+  function askStatusChange(order: LaundryOrder, next: LaundryState) {
+    transition.reset();
+    setStatusNotice("");
+    setStatusMove({ order, next });
+  }
   const rows = orders.data?.items || [];
   const customerRows = useMemo(() => {
     const metrics = new Map((customerInsights.data?.customers || []).map((entry) => [entry.customerId, entry]));
@@ -279,15 +287,24 @@ function StoreOrdersCustomersWorkspace() {
               Print opens the system dialog; choose “Save as PDF” when needed.
             </span>
           </div>
+          {statusNotice ? (
+            <div role="status" className="flex items-center justify-between gap-3 border-b border-[#9ccabf] bg-[#eef8f3] px-5 py-2.5 text-xs font-semibold text-[#2e6a60]">
+              <span>
+                <CheckCircle2 className="mr-1.5 inline h-4 w-4" />
+                {statusNotice}
+              </span>
+              <button type="button" onClick={() => setStatusNotice("")} aria-label="Dismiss" className="text-[#2e6a60]">
+                ×
+              </button>
+            </div>
+          ) : null}
           <OrderTable
             rows={rows}
             loading={orders.isLoading}
             pending={transition.isPending}
             onSelect={openOrderDrawer}
             onOpenCustomer={setSelectedCustomerId}
-            onTransition={(id, next, expectedVersion) =>
-              transition.mutate({ id, next, expectedVersion })
-            }
+            onTransition={askStatusChange}
           />
           <div className="flex items-center justify-between border-t border-[#263f44]/8 px-5 py-3 text-xs text-[#617178]">
             <button type="button" disabled={page <= 1 || orders.isFetching} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-lg border border-[#263f44]/15 bg-white px-3 py-1.5 font-bold text-[#315d57] disabled:cursor-not-allowed disabled:opacity-40">Previous</button>
@@ -324,13 +341,21 @@ function StoreOrdersCustomersWorkspace() {
           <CustomerTable rows={customerRows} loading={customers.isLoading || customerInsights.isLoading} onOpen={setSelectedCustomerId} />
         </section>
       </>}
-      {transition.isError ? (
-        <p className="mt-5 rounded-xl bg-rose-50 p-3 text-sm text-rose-700">
-          {transition.error instanceof Error
-            ? operatorErrorMessage(transition.error, "The order status could not be updated.")
-            : "The order status could not be updated."}
-        </p>
-      ) : null}
+      <OrderStatusDialog
+        move={statusMove}
+        pending={transition.isPending}
+        error={transition.error}
+        onConfirm={(override) => statusMove && transition.mutate({ move: statusMove, override })}
+        onClose={() => {
+          transition.reset();
+          setStatusMove(null);
+        }}
+        onReload={() => {
+          transition.reset();
+          setStatusMove(null);
+          client.invalidateQueries({ queryKey: ["laundry-orders"] });
+        }}
+      />
       {selectedCustomerId ? (
         <CustomerWorkCardDrawer
           id={selectedCustomerId}
@@ -574,11 +599,7 @@ function OrderTable({
   pending: boolean;
   onSelect: (id: string) => void;
   onOpenCustomer: (id: string) => void;
-  onTransition: (
-    id: string,
-    next: LaundryState,
-    expectedVersion?: number,
-  ) => void;
+  onTransition: (order: LaundryOrder, next: LaundryState) => void;
 }) {
   return (
     <div className="overflow-x-auto">
@@ -634,11 +655,7 @@ function OrderRow({
   pending: boolean;
   onSelect: (id: string) => void;
   onOpenCustomer: (id: string) => void;
-  onTransition: (
-    id: string,
-    next: LaundryState,
-    expectedVersion?: number,
-  ) => void;
+  onTransition: (order: LaundryOrder, next: LaundryState) => void;
 }) {
   const next = nextLaundryState[order.state];
   const needsRider = next === "Out for Delivery" && !order.deliveryRider;
@@ -693,6 +710,18 @@ function OrderRow({
         <StatePill state={order.state} />
       </td>
       <td className="px-5 py-4 text-right">
+        <div className="flex items-center justify-end gap-2">
+        {order.state === "Ready" ? (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => onTransition(order, "Delivered")}
+            title="The customer collected it at the counter"
+            className="rounded-lg border border-[#123039]/20 bg-white px-2.5 py-1.5 text-xs font-bold text-[#17353c] hover:bg-[#f1f4f1]"
+          >
+            Handed over
+          </button>
+        ) : null}
         {next ? (
           needsRider ? (
             <Link
@@ -705,7 +734,7 @@ function OrderRow({
           ) : (
             <button
               disabled={pending}
-              onClick={() => onTransition(order.id, next, order.version)}
+              onClick={() => onTransition(order, next)}
               className="inline-flex items-center gap-1 rounded-lg bg-[#123039] px-2.5 py-1.5 text-xs font-bold text-white hover:bg-[#1d4a53]"
             >
               {next}
@@ -720,6 +749,7 @@ function OrderRow({
             View
           </button>
         )}
+        </div>
       </td>
     </tr>
   );

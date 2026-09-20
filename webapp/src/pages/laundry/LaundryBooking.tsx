@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, CircleDollarSign, Download, Droplets, ImagePlus, Loader2, Minus, PackagePlus, Pause, PlayCircle, Plus, Printer, RotateCcw, Scissors, Search, Shirt, Sparkles, Tag, Truck, UserPlus, Wind, X, Zap } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiGet, apiPost, apiPostOffline, operatorErrorMessage } from '@/lib/api'
+import { ApiError, apiGet, apiPost, apiPostOffline, operatorErrorMessage } from '@/lib/api'
 import { useVendorAccess } from '@/lib/vendorAccess'
 import { garmentVisuals, generatedVisualManifest } from '@/assets/generated/manifest'
 import type { LaundryCatalogue, LaundryQuote } from '@/lib/laundry'
@@ -182,17 +182,35 @@ export default function LaundryBooking() {
   // does, and this lookup would just 404 for them, so it isn't attempted.
   const walletBalanceQuery = useQuery({
     queryKey: ['wallet-balance', customer?.phone],
-    queryFn: () => apiPost<{ userId: string; name: string; balancePaise: number }>('/marketplace/cloud/wallet/lookup', { phone: customer!.phone }),
+    queryFn: async () => {
+      try {
+        return await apiPost<{ userId: string; name: string; balancePaise: number }>('/marketplace/cloud/wallet/lookup', { phone: customer!.phone })
+      } catch (error) {
+        // Refused because the vendor's type changed under us: pick up the current type right now, not at the next refresh.
+        if (error instanceof ApiError && error.code === 'VENDOR_TIER_RESTRICTED') void queryClient.invalidateQueries({ queryKey: ['vendor-access'] })
+        throw error
+      }
+    },
     enabled: Boolean(customer?.phone) && !walletConfirmed && access.walletAccess,
     retry: false,
   })
   // A Standard vendor has no LNDRY-wallet access — nothing from the wallet is ever shown or offered.
   const walletBalance = access.walletAccess ? walletBalanceQuery.data : undefined
   const walletProposedPaise = Math.max(0, Math.min(walletBalance?.balancePaise || 0, runningTotalPaise))
+  // Say WHY there is nothing to offer, instead of the wallet option silently not appearing.
+  const walletLookupFailed = access.walletAccess && walletBalanceQuery.isError && (walletBalanceQuery.error as { code?: string })?.code !== 'NOT_FOUND'
+  const walletNote = walletBalance && walletBalance.balancePaise <= 0
+    ? <p className="mt-3 text-[10px] text-[#8a959a]">This customer's LNDRY wallet balance is ₹0 — there is nothing to redeem.</p>
+    : walletLookupFailed
+      ? <p role="alert" className="mt-3 text-[11px] text-rose-700">{operatorErrorMessage(walletBalanceQuery.error, 'The LNDRY wallet could not be checked.')}</p>
+      : null
   const createWalletRequest = useMutation({
     mutationFn: () => apiPost<{ requestId: string; expiresAt: string }>('/marketplace/cloud/wallet/redemption-requests', { customerUserId: walletBalanceQuery.data!.userId, amountPaise: walletProposedPaise }),
     onSuccess: (created) => { setWalletRequest(created); setWalletError('') },
-    onError: (error: Error) => { setWalletError(operatorErrorMessage(error, 'Could not start a wallet redemption for this customer.')); setWalletEnabled(false) },
+    onError: (error: Error) => {
+      if (error instanceof ApiError && error.code === 'VENDOR_TIER_RESTRICTED') void queryClient.invalidateQueries({ queryKey: ['vendor-access'] })
+      setWalletError(operatorErrorMessage(error, 'Could not start a wallet redemption for this customer.')); setWalletEnabled(false)
+    },
   })
   const confirmWalletRequest = useMutation({
     mutationFn: () => apiPost<{ requestId: string; amountPaise: number }>(`/marketplace/cloud/wallet/redemption-requests/${walletRequest!.requestId}/confirm`, { otp: walletOtp }),
@@ -213,6 +231,14 @@ export default function LaundryBooking() {
     if (walletRequest) cancelWalletRequest.mutate()
     setWalletEnabled(false); setWalletConfirmed(null); setWalletOtp(''); setWalletError('')
   }
+  // If the vendor's type takes the wallet away while a code is out, withdraw that request so the customer's app
+  // is not left showing it (a redemption the customer ALREADY confirmed stays applied — it was debited legitimately).
+  useEffect(() => {
+    if (!access.loaded || access.walletAccess) return
+    setWalletEnabled(false)
+    if (walletRequest) cancelWalletRequest.mutate()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [access.loaded, access.walletAccess])
   const booking = useMutation({
     mutationFn: () => apiPostOffline<BookingResult>('/laundry/orders', {
       customer: customer ? { id: customer.id, address: deliveryAddress || customer.address } : { name: newCustomerName, phone: newCustomerPhone, address: deliveryAddress },
@@ -352,7 +378,7 @@ export default function LaundryBooking() {
               <WalletCountdown expiresAt={walletRequest.expiresAt} />
             </div> : null}
             {walletError ? <p role="alert" className="mt-2 text-[11px] text-rose-700">{walletError}</p> : null}
-          </div> : null}
+          </div> : walletNote}
           </div> : <>
           <div className="relative mt-4"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7e8d90]" /><input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="Search name or phone" className="h-10 w-full rounded-xl border border-[#263f44]/15 bg-[#fbfbf9] pl-9 pr-3 text-sm outline-none transition focus:border-[#438b82] focus:ring-2 focus:ring-[#b9ded6]" /></div>
           {customerQuery.data && <div className="mt-2 max-h-44 space-y-1 overflow-y-auto rounded-xl border border-[#263f44]/10 p-1">{customerQuery.data.map((result) => <button type="button" key={result.id} onClick={() => { setCustomer(result); setCustomerSearch('') }} className="w-full rounded-lg px-2.5 py-2 text-left hover:bg-[#edf5f1]"><span className="block text-sm font-medium">{result.name}</span><span className="text-xs text-[#718087]">{result.phone}</span></button>)}</div>}
