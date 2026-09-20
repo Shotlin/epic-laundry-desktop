@@ -16,7 +16,7 @@ type Customer = { id: string; name: string; phone: string; email?: string; addre
 type Receipt = { orderNumber: string; invoiceNumber?: string; customer: { name: string; phone: string }; orderDate: string; expectedDeliveryDate: string; fulfillmentMode: string; items: LaundryQuote['items']; subtotal: number; charges: number; discounts: number; taxAmount: number; grandTotal: number; paymentMode: string; paymentStatus: string }
 type TagData = { tagNumber: string; containerId?: string; tagKind?: 'garment' | 'container'; orderNumber: string; customer: string; garment: string; service: string; sequence: number; total: number; orderDate: string; expectedDeliveryDate: string; weightKg?: number }
 type BookingResult = { order?: { id: string; orderNumber: string }; receipt: Receipt; tags: TagData[]; containerTags?: TagData[] }
-type BookingDraft = { cart: Record<string, CartLine>; customer: Customer | null; newCustomerName: string; newCustomerPhone: string; deliveryAddress: string; serviceZone: string; containerCount?: number; deliveryMode: 'Pickup Order' | 'Home Delivery' | 'Express Delivery'; expectedDeliveryDate: string; charges: number; discounts: number; taxRate: number; chargeRuleIds: string[]; discountRuleIds: string[]; taxRuleId: string; notes: string }
+type BookingDraft = { cart: Record<string, CartLine>; customer: Customer | null; newCustomerName: string; newCustomerPhone: string; deliveryAddress: string; serviceZone: string; containerCount?: number; deliveryMode: 'Pickup Order' | 'Home Delivery' | 'Express Delivery'; expectedDeliveryDate: string; charges: number; discounts: number; taxRate: number; chargeRuleIds: string[]; discountRuleIds: string[]; taxRuleId: string; notes: string; walletAuth?: { requestId: string; amountPaise: number; holdExpiresAt: string } }
 type HeldDraft = BookingDraft & { id: string; savedAt: string; paymentMode: 'Pay Later' | 'Cash' | 'UPI' | 'Card' | 'Bank'; paymentReference: string; serverHoldId?: string; holdCode?: string; ownership?: 'mine' | 'other' | 'expired' | 'unassigned' }
 type ServerHold = { id: string; holdCode: string; status: 'Held' | 'Resumed' | 'Cancelled'; payload: HeldDraft; createdAt: string; ownership: 'mine' | 'other' | 'expired' | 'unassigned'; leaseExpiresAt?: string }
 type HoldPresence = { leaseMinutes: number; totalHeld: number; mineActive: number; otherActive: number; expired: number; unassigned: number }
@@ -96,7 +96,7 @@ export default function LaundryBooking() {
   const access = useVendorAccess()
   const [walletEnabled, setWalletEnabled] = useState(false)
   const [walletRequest, setWalletRequest] = useState<{ requestId: string; expiresAt: string } | null>(null)
-  const [walletConfirmed, setWalletConfirmed] = useState<{ requestId: string; amountPaise: number } | null>(null)
+  const [walletConfirmed, setWalletConfirmed] = useState<{ requestId: string; amountPaise: number; holdExpiresAt?: string } | null>(null)
   const [walletOtp, setWalletOtp] = useState('')
   const [walletError, setWalletError] = useState('')
   const cashShifts = useQuery({ queryKey: ['laundry-cash-shifts'], queryFn: () => apiGet<Array<{ id: string; status: string; register: string }>>('/laundry/cash-shifts'), enabled: paymentMode === 'Cash', retry: false })
@@ -126,6 +126,10 @@ export default function LaundryBooking() {
         if (Array.isArray(parsed.discountRuleIds)) setDiscountRuleIds(parsed.discountRuleIds)
         if (typeof parsed.taxRuleId === 'string') setTaxRuleId(parsed.taxRuleId)
         if (typeof parsed.notes === 'string') setNotes(parsed.notes)
+        // A customer's wallet approval survives a reload / refresh while it is still valid (it lasts 15 minutes and
+        // nothing has been debited), so the operator is not sent back to ask for a new code.
+        const auth = parsed.walletAuth
+        if (auth && typeof auth.requestId === 'string' && auth.holdExpiresAt && new Date(auth.holdExpiresAt).getTime() > Date.now()) setWalletConfirmed(auth)
       }
     } catch { /* a corrupt draft is ignored and replaced by the next save */ }
     try {
@@ -136,9 +140,9 @@ export default function LaundryBooking() {
   }, [])
   useEffect(() => {
     if (!draftRestored) return
-    const draft: BookingDraft = { cart, customer, newCustomerName, newCustomerPhone, deliveryAddress, serviceZone, containerCount: containerCount === '' ? undefined : Number(containerCount), deliveryMode, expectedDeliveryDate, charges, discounts, taxRate, chargeRuleIds, discountRuleIds, taxRuleId, notes }
+    const draft: BookingDraft = { cart, customer, newCustomerName, newCustomerPhone, deliveryAddress, serviceZone, containerCount: containerCount === '' ? undefined : Number(containerCount), deliveryMode, expectedDeliveryDate, charges, discounts, taxRate, chargeRuleIds, discountRuleIds, taxRuleId, notes, walletAuth: walletConfirmed?.holdExpiresAt ? { requestId: walletConfirmed.requestId, amountPaise: walletConfirmed.amountPaise, holdExpiresAt: walletConfirmed.holdExpiresAt } : undefined }
     try { window.localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)) } catch { /* local storage is best effort */ }
-  }, [draftRestored, cart, customer, newCustomerName, newCustomerPhone, deliveryAddress, serviceZone, containerCount, deliveryMode, expectedDeliveryDate, charges, discounts, taxRate, chargeRuleIds, discountRuleIds, taxRuleId, notes])
+  }, [draftRestored, cart, customer, newCustomerName, newCustomerPhone, deliveryAddress, serviceZone, containerCount, deliveryMode, expectedDeliveryDate, charges, discounts, taxRate, chargeRuleIds, discountRuleIds, taxRuleId, notes, walletConfirmed])
   useEffect(() => {
     if (!serverHolds.data) return
     const remote = serverHolds.data.filter((hold) => hold.status === 'Held').map((hold) => ({ ...hold.payload, id: `server-${hold.id}`, serverHoldId: hold.id, holdCode: hold.holdCode, savedAt: hold.createdAt, ownership: hold.ownership }))
@@ -213,7 +217,7 @@ export default function LaundryBooking() {
     },
   })
   const confirmWalletRequest = useMutation({
-    mutationFn: () => apiPost<{ requestId: string; amountPaise: number }>(`/marketplace/cloud/wallet/redemption-requests/${walletRequest!.requestId}/confirm`, { otp: walletOtp }),
+    mutationFn: () => apiPost<{ requestId: string; amountPaise: number; holdExpiresAt?: string }>(`/marketplace/cloud/wallet/redemption-requests/${walletRequest!.requestId}/confirm`, { otp: walletOtp }),
     onSuccess: (confirmed) => { setWalletConfirmed(confirmed); setWalletRequest(null); setWalletOtp(''); setWalletError('') },
     onError: (error: Error) => setWalletError(operatorErrorMessage(error, 'That code did not match — ask the customer to check their app and try again.')),
   })
@@ -229,6 +233,9 @@ export default function LaundryBooking() {
   }
   function clearWalletRedemption() {
     if (walletRequest) cancelWalletRequest.mutate()
+    // The customer's approval only RESERVED the amount (nothing was debited): removing it releases the reservation
+    // right away instead of leaving it to lapse on its own.
+    if (walletConfirmed) void apiPost(`/marketplace/cloud/wallet/redemption-requests/${walletConfirmed.requestId}/cancel`, {}).catch(() => undefined)
     setWalletEnabled(false); setWalletConfirmed(null); setWalletOtp(''); setWalletError('')
   }
   // If the vendor's type takes the wallet away while a code is out, withdraw that request so the customer's app
@@ -245,6 +252,11 @@ export default function LaundryBooking() {
       items, containerCount: containerCount === '' ? undefined : Number(containerCount), expectedDeliveryDate, fulfillmentMode: deliveryMode, serviceZone, cashRegister: paymentMode === 'Cash' ? cashRegister || undefined : undefined, paymentMode, paymentReference, charges, discounts, taxRate, chargeRuleIds, discountRuleIds, taxRuleId, notes, photoPaths: photoPath,
       walletRedemption: walletConfirmed ? { requestId: walletConfirmed.requestId, amountPaise: walletConfirmed.amountPaise } : undefined,
     }, 'laundry_order'),
+    onError: (error: Error) => {
+      // The wallet approval lapsed / the wallet changed: nothing was taken, the approval is unusable — clear it so the
+      // operator can ask the customer to approve again (the message says exactly that).
+      if (error instanceof ApiError && /^(WALLET_|INSUFFICIENT_BALANCE)/.test(error.code || '')) { setWalletConfirmed(null); setWalletEnabled(false) }
+    },
     onSuccess: (result) => {
       setReceipt(result); setCart({}); setCustomer(null); setCustomerSearch(''); setNewCustomerName(''); setNewCustomerPhone(''); setDeliveryAddress(''); setServiceZone(''); setContainerCount(''); setPhotoPath(''); setPhotoError(''); setPaymentReference(''); setCashRegister(''); setPaymentMode('Pay Later'); setNotes(''); setChargeRuleIds([]); setDiscountRuleIds([]); setTaxRuleId('')
       setWalletEnabled(false); setWalletRequest(null); setWalletConfirmed(null); setWalletOtp(''); setWalletError('')
@@ -365,7 +377,7 @@ export default function LaundryBooking() {
         <div className="flex items-center gap-2"><span className="grid h-8 w-8 place-items-center rounded-lg bg-[#eaf3ef] text-[#39786f]"><UserPlus className="h-4 w-4" /></span><div><p className="font-semibold">Customer</p><p className="text-xs text-[#74848a]">Find or make one quickly</p></div></div>
         <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_1.2fr_1fr]"><div>{customer ? <div className="rounded-xl bg-[#edf5f1] p-3"><div className="flex items-start justify-between gap-2"><div><p className="font-semibold text-[#1d4e49]">{customer.name}</p><p className="mt-0.5 text-xs text-[#52716c]">{customer.phone}</p></div><button type="button" onClick={() => { setCustomer(null); clearWalletRedemption() }} className="rounded-lg p-1 text-[#52716c] hover:bg-white" aria-label="Clear customer"><X className="h-4 w-4" /></button></div><button type="button" disabled={repeatPending} onClick={() => void repeatLastOrder()} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-[#39786f]/25 bg-white px-3 py-2 text-xs font-bold text-[#2d6b63] disabled:opacity-60"><RotateCcw className={`h-3.5 w-3.5 ${repeatPending ? 'animate-spin' : ''}`} />{repeatPending ? 'Loading previous order…' : 'Repeat last order'}</button>{repeatNotice ? <p role="status" className="mt-2 text-[11px] leading-4 text-[#52716c]">{repeatNotice}</p> : null}
           {!access.walletAccess ? (access.loaded ? <p className="mt-3 text-[10px] leading-4 text-[#8a959a]">Walk-in POS sales stay independent on your {access.vendorType ? access.vendorType.charAt(0) + access.vendorType.slice(1).toLowerCase() : ''} plan: the customer's LNDRY wallet and LNDRY-app order sync are not available at the counter. LNDRY app orders are unaffected.</p> : null)
-          : walletConfirmed ? <div className="mt-3 rounded-lg border border-[#438b82]/40 bg-white p-2.5"><div className="flex items-center justify-between gap-2"><span className="text-xs font-bold text-[#1d4e49]">₹{(walletConfirmed.amountPaise / 100).toFixed(2)} applied from LNDRY Wallet</span><button type="button" onClick={clearWalletRedemption} className="text-[10px] font-semibold text-[#8a5a2a] hover:underline">Remove</button></div></div>
+          : walletConfirmed ? <div className="mt-3 rounded-lg border border-[#438b82]/40 bg-white p-2.5"><div className="flex items-center justify-between gap-2"><span className="text-xs font-bold text-[#1d4e49]">₹{(walletConfirmed.amountPaise / 100).toFixed(2)} reserved from LNDRY Wallet</span><button type="button" onClick={clearWalletRedemption} className="text-[10px] font-semibold text-[#8a5a2a] hover:underline">Remove</button></div><p className="mt-1 text-[10px] leading-4 text-[#52716c]">Nothing is deducted yet — the wallet is charged only when you book this order.</p>{walletConfirmed.holdExpiresAt ? <WalletCountdown expiresAt={walletConfirmed.holdExpiresAt} /> : null}</div>
           : walletBalance && walletBalance.balancePaise > 0 ? <div className="mt-3 rounded-lg border border-[#263f44]/10 bg-white p-2.5">
             <div className="flex items-center justify-between gap-2"><span className="text-xs text-[#52716c]">Wallet balance: <strong className="text-[#1d4e49]">₹{(walletBalance.balancePaise / 100).toFixed(2)}</strong></span>
               <label className="inline-flex cursor-pointer items-center gap-1.5 text-[10px] font-bold text-[#39786f]"><input type="checkbox" checked={walletEnabled} disabled={items.length === 0 || createWalletRequest.isPending} onChange={(event) => toggleWallet(event.target.checked)} className="h-3.5 w-3.5 accent-[#39786f]" />Use wallet</label>
