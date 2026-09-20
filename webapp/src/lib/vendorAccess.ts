@@ -6,9 +6,9 @@ export type VendorType = 'STANDARD' | 'PARTNER' | 'EXCLUSIVE'
 
 export type VendorAccess = {
   vendorType: VendorType | null
-  /** Counter sales are linked to the customer's LNDRY app; LNDRY accounts can be looked up by phone. */
+  /** POS walk-in sales sync to the customer's LNDRY app; LNDRY accounts can be looked up by phone. (Not about LNDRY app orders — those work for every vendor.) */
   appSync: boolean
-  /** LNDRY wallet balance lookup, redemption and payment. */
+  /** The customer's LNDRY wallet at the POS counter: balance lookup, redemption and payment. (App checkout with the wallet is unaffected.) */
   walletAccess: boolean
   /** False until the backend has answered at least once. */
   loaded: boolean
@@ -19,7 +19,8 @@ const NOT_CONNECTED: VendorAccess = { vendorType: null, appSync: false, walletAc
 const UNRESTRICTED: VendorAccess = { vendorType: null, appSync: true, walletAccess: true, loaded: true }
 
 /**
- * What this vendor's counter may do with the LNDRY ecosystem, straight from the backend
+ * How connected this vendor's POS walk-in sales are to LNDRY (order sync + wallet at the counter),
+ * straight from the backend
  * (GET /vendor/counter/access). Read on sign-in, whenever the window regains focus and every
  * few minutes, so an admin changing the vendor's type shows up here without a redeploy.
  * Until the backend has answered — or if it cannot be reached — the ecosystem features stay
