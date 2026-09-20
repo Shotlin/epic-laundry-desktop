@@ -54,6 +54,3 @@ void toPaise
 
 // Small gaps the catalogue and finance screens ask for on load
 route('GET', '/settings/setup-progress', async () => ({ business: true, owner: true, operations: true, catalogue: true, recovery: true, updatedAt: new Date().toISOString(), updatedBy: 'LNDRY vendor account' }))
-route('POST', '/marketplace/cloud/catalogue-sync', async ({ get }) => { forgetCatalogue(); const rows = listOf(await get('/vendor/services/catalogue')) as Array<{ category_id: string; vendor_service_id: string; garment_type_id: string }>
-  return { categoriesSeen: new Set(rows.map((r) => r.category_id)).size, servicesSeen: new Set(rows.map((r) => r.vendor_service_id)).size, garmentsSeen: new Set(rows.map((r) => r.garment_type_id)).size, created: 0, updated: rows.length, imagesEmbedded: 0 }
-})

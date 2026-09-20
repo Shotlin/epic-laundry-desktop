@@ -15,6 +15,9 @@ export type LaundryCatalogue = {
     image?: string;
     sort_order?: number;
     active?: boolean;
+    // POS catalogue (website build): sub-category parent and where the record came from.
+    parentId?: string;
+    source?: "MARKETPLACE" | "POS";
   }>;
   services: Array<{
     id: string;
@@ -22,6 +25,8 @@ export type LaundryCatalogue = {
     description?: string;
     units?: string[];
     active?: boolean;
+    image?: string;
+    source?: "MARKETPLACE" | "POS";
   }>;
   garments: Array<{
     id: string;
@@ -32,6 +37,10 @@ export type LaundryCatalogue = {
     unit: string;
     photo?: string;
     visual_key?: string;
+    active?: boolean;
+    hsn?: string;
+    gst_rate?: number;
+    source?: "MARKETPLACE" | "POS";
   }>;
   prices: Array<{
     id: string;
@@ -42,6 +51,10 @@ export type LaundryCatalogue = {
     serviceName: string;
     rate: number;
     active?: boolean;
+    // POS catalogue (website build): the LNDRY app price this counter price started from.
+    source?: "MARKETPLACE" | "POS";
+    marketplaceRate?: number | null;
+    overridden?: boolean;
   }>;
   chargeRules: Array<{
     id: string;

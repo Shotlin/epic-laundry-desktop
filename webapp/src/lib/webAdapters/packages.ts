@@ -5,7 +5,7 @@ type Rate = { id: string; garmentTypeId: string; vendorServiceId: string }
 const rates = async (get: (p: string) => Promise<any>) => listOf(await get('/vendor/counter/rates')) as Rate[]
 const rateFor = (all: Rate[], garment: string, service: string) => {
   const found = all.find((rate) => rate.garmentTypeId === garment && rate.vendorServiceId === service)
-  if (!found) throw new Error('That garment and service combination has no price on your catalogue.')
+  if (!found) throw new Error('Packages can only include garments and services that come from your LNDRY services — counter-only items are not supported in packages yet.')
   return found.id
 }
 const title = (value: string) => value.charAt(0) + value.slice(1).toLowerCase().replace(/_/g, ' ')

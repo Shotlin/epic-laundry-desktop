@@ -27,8 +27,11 @@ export function priceOrder(catalogue: LaundryCatalogue, input: any): LaundryQuot
     const key = `${line.garment}:${line.service}`
     if (seen.has(key)) throw new Error('Duplicate garment and service lines must be combined.')
     seen.add(key)
-    const price = catalogue.prices.find((entry) => entry.garment === line.garment && entry.service === line.service && entry.active !== false)
-    const garment = catalogue.garments.find((entry) => entry.id === line.garment)
+    // A price set for this customer wins over the general one; switched-off garments/services/prices cannot be quoted.
+    const candidates = catalogue.prices.filter((entry) => entry.garment === line.garment && entry.service === line.service && entry.active !== false)
+    const price = candidates.find((entry) => entry.customer && entry.customer === input.customerId) || candidates.find((entry) => !entry.customer)
+    const garment = catalogue.garments.find((entry) => entry.id === line.garment && entry.active !== false)
+    if (catalogue.services.find((entry) => entry.id === line.service)?.active === false) throw new Error('No active price exists for this garment and service.')
     if (!price || !garment) throw new Error('No active price exists for this garment and service.')
     if (['Piece', 'Pair'].includes(garment.unit) && !Number.isInteger(qty)) throw new Error(`${garment.unit} quantities must be whole numbers.`)
     return { garment: garment.id, garmentName: garment.name, service: price.service, serviceName: price.serviceName, unit: garment.unit, qty: round(qty), rate: price.rate, amount: round(qty * price.rate) }
