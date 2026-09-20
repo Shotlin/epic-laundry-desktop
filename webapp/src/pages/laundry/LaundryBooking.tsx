@@ -3,6 +3,7 @@ import { Check, ChevronDown, CircleDollarSign, Download, Droplets, ImagePlus, Lo
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiGet, apiPost, apiPostOffline, operatorErrorMessage } from '@/lib/api'
+import { useVendorAccess } from '@/lib/vendorAccess'
 import { garmentVisuals, generatedVisualManifest } from '@/assets/generated/manifest'
 import type { LaundryCatalogue, LaundryQuote } from '@/lib/laundry'
 import { cn, formatINR, localDateKey } from '@/lib/utils'
@@ -90,6 +91,7 @@ export default function LaundryBooking() {
   const [repeatPending, setRepeatPending] = useState(false)
   const [repeatNotice, setRepeatNotice] = useState('')
   // ── LNDRY wallet redemption at the counter ──────────────────────────────
+  const access = useVendorAccess()
   const [walletEnabled, setWalletEnabled] = useState(false)
   const [walletRequest, setWalletRequest] = useState<{ requestId: string; expiresAt: string } | null>(null)
   const [walletConfirmed, setWalletConfirmed] = useState<{ requestId: string; amountPaise: number } | null>(null)
@@ -157,9 +159,9 @@ export default function LaundryBooking() {
   const remoteMatchQuery = useQuery({
     queryKey: ['laundry-customers-remote', searchDigits],
     queryFn: () => apiGet<{ match: { userId: string; name?: string; phone: string } | null }>(`/laundry/customers/remote-lookup?phone=${encodeURIComponent(searchDigits)}`),
-    enabled: searchDigits.length >= 8,
+    enabled: searchDigits.length >= 8 && access.appSync,
   })
-  const remoteMatch = remoteMatchQuery.data?.match && !(customerQuery.data || []).some((result) => result.phone.replace(/\D/g, '') === remoteMatchQuery.data!.match!.phone)
+  const remoteMatch = access.appSync && remoteMatchQuery.data?.match && !(customerQuery.data || []).some((result) => result.phone.replace(/\D/g, '') === remoteMatchQuery.data!.match!.phone)
     ? remoteMatchQuery.data.match
     : null
   const adoptRemoteCustomer = useMutation({
@@ -179,10 +181,12 @@ export default function LaundryBooking() {
   const walletBalanceQuery = useQuery({
     queryKey: ['wallet-balance', customer?.phone],
     queryFn: () => apiPost<{ userId: string; name: string; balancePaise: number }>('/marketplace/cloud/wallet/lookup', { phone: customer!.phone }),
-    enabled: Boolean(customer?.phone) && !walletConfirmed,
+    enabled: Boolean(customer?.phone) && !walletConfirmed && access.walletAccess,
     retry: false,
   })
-  const walletProposedPaise = Math.max(0, Math.min(walletBalanceQuery.data?.balancePaise || 0, runningTotalPaise))
+  // A Standard vendor has no LNDRY-wallet access — nothing from the wallet is ever shown or offered.
+  const walletBalance = access.walletAccess ? walletBalanceQuery.data : undefined
+  const walletProposedPaise = Math.max(0, Math.min(walletBalance?.balancePaise || 0, runningTotalPaise))
   const createWalletRequest = useMutation({
     mutationFn: () => apiPost<{ requestId: string; expiresAt: string }>('/marketplace/cloud/wallet/redemption-requests', { customerUserId: walletBalanceQuery.data!.userId, amountPaise: walletProposedPaise }),
     onSuccess: (created) => { setWalletRequest(created); setWalletError('') },
@@ -200,7 +204,7 @@ export default function LaundryBooking() {
   function toggleWallet(next: boolean) {
     setWalletEnabled(next)
     setWalletError('')
-    if (next && walletBalanceQuery.data && walletProposedPaise > 0 && !walletRequest && !walletConfirmed) createWalletRequest.mutate()
+    if (next && walletBalance && walletProposedPaise > 0 && !walletRequest && !walletConfirmed) createWalletRequest.mutate()
     else if (!next && walletRequest) cancelWalletRequest.mutate()
   }
   function clearWalletRedemption() {
@@ -332,9 +336,10 @@ export default function LaundryBooking() {
       <section className="xl:col-span-2 rounded-[22px] border border-[#263f44]/10 bg-white p-4 shadow-[0_8px_28px_rgba(37,48,43,.04)]">
         <div className="flex items-center gap-2"><span className="grid h-8 w-8 place-items-center rounded-lg bg-[#eaf3ef] text-[#39786f]"><UserPlus className="h-4 w-4" /></span><div><p className="font-semibold">Customer</p><p className="text-xs text-[#74848a]">Find or make one quickly</p></div></div>
         <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_1.2fr_1fr]"><div>{customer ? <div className="rounded-xl bg-[#edf5f1] p-3"><div className="flex items-start justify-between gap-2"><div><p className="font-semibold text-[#1d4e49]">{customer.name}</p><p className="mt-0.5 text-xs text-[#52716c]">{customer.phone}</p></div><button type="button" onClick={() => { setCustomer(null); clearWalletRedemption() }} className="rounded-lg p-1 text-[#52716c] hover:bg-white" aria-label="Clear customer"><X className="h-4 w-4" /></button></div><button type="button" disabled={repeatPending} onClick={() => void repeatLastOrder()} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-[#39786f]/25 bg-white px-3 py-2 text-xs font-bold text-[#2d6b63] disabled:opacity-60"><RotateCcw className={`h-3.5 w-3.5 ${repeatPending ? 'animate-spin' : ''}`} />{repeatPending ? 'Loading previous order…' : 'Repeat last order'}</button>{repeatNotice ? <p role="status" className="mt-2 text-[11px] leading-4 text-[#52716c]">{repeatNotice}</p> : null}
-          {walletConfirmed ? <div className="mt-3 rounded-lg border border-[#438b82]/40 bg-white p-2.5"><div className="flex items-center justify-between gap-2"><span className="text-xs font-bold text-[#1d4e49]">₹{(walletConfirmed.amountPaise / 100).toFixed(2)} applied from LNDRY Wallet</span><button type="button" onClick={clearWalletRedemption} className="text-[10px] font-semibold text-[#8a5a2a] hover:underline">Remove</button></div></div>
-          : walletBalanceQuery.data && walletBalanceQuery.data.balancePaise > 0 ? <div className="mt-3 rounded-lg border border-[#263f44]/10 bg-white p-2.5">
-            <div className="flex items-center justify-between gap-2"><span className="text-xs text-[#52716c]">Wallet balance: <strong className="text-[#1d4e49]">₹{(walletBalanceQuery.data.balancePaise / 100).toFixed(2)}</strong></span>
+          {!access.walletAccess ? (access.loaded ? <p className="mt-3 text-[10px] leading-4 text-[#8a959a]">Your {access.vendorType ? access.vendorType.charAt(0) + access.vendorType.slice(1).toLowerCase() : ''} plan is POS-only: LNDRY wallet and customer-app sync are not available.</p> : null)
+          : walletConfirmed ? <div className="mt-3 rounded-lg border border-[#438b82]/40 bg-white p-2.5"><div className="flex items-center justify-between gap-2"><span className="text-xs font-bold text-[#1d4e49]">₹{(walletConfirmed.amountPaise / 100).toFixed(2)} applied from LNDRY Wallet</span><button type="button" onClick={clearWalletRedemption} className="text-[10px] font-semibold text-[#8a5a2a] hover:underline">Remove</button></div></div>
+          : walletBalance && walletBalance.balancePaise > 0 ? <div className="mt-3 rounded-lg border border-[#263f44]/10 bg-white p-2.5">
+            <div className="flex items-center justify-between gap-2"><span className="text-xs text-[#52716c]">Wallet balance: <strong className="text-[#1d4e49]">₹{(walletBalance.balancePaise / 100).toFixed(2)}</strong></span>
               <label className="inline-flex cursor-pointer items-center gap-1.5 text-[10px] font-bold text-[#39786f]"><input type="checkbox" checked={walletEnabled} disabled={items.length === 0 || createWalletRequest.isPending} onChange={(event) => toggleWallet(event.target.checked)} className="h-3.5 w-3.5 accent-[#39786f]" />Use wallet</label>
             </div>
             {items.length === 0 && walletEnabled === false ? <p className="mt-1 text-[10px] text-[#8a959a]">Add an item first — the amount is capped by the order total.</p> : null}
