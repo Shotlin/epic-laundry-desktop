@@ -95,6 +95,8 @@ export type LaundryOrder = {
   taxRate: number;
   taxAmount: number;
   grandTotal: number;
+  /** The labelled lines behind charges / discounts / tax, exactly as the backend calculated them. */
+  breakdown?: PriceBreakdown;
   paymentMode: string;
   paymentStatus: string;
   source: string;
@@ -214,6 +216,14 @@ export type LaundryDashboard = {
   };
 };
 
+/** One labelled line of the price breakdown, e.g. "Discount (10%)" — amounts in rupees. */
+export type PriceBreakdownLine = { label: string; percent: number | null; amount: number };
+export type PriceBreakdown = {
+  charges: PriceBreakdownLine[];
+  discounts: PriceBreakdownLine[];
+  tax: PriceBreakdownLine | null;
+};
+
 export type LaundryQuote = {
   items: LaundryOrder["items"];
   subtotal: number;
@@ -223,6 +233,7 @@ export type LaundryQuote = {
   taxRate: number;
   taxAmount: number;
   grandTotal: number;
+  breakdown: PriceBreakdown;
 };
 
 export type LaundryPaymentSummary = {

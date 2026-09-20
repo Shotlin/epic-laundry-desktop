@@ -1,7 +1,7 @@
 // Counter orders: booking, list, detail, lifecycle, payments, customers.
 // Backed by the real /api/v1/vendor/counter module (store_orders work orders).
 import type { LaundryOrder } from '../laundry'
-import { route, rupees, toPaise, onlyDigits, listOf, AdapterUnavailable } from './core'
+import { route, rupees, toPaise, onlyDigits, listOf, breakdownOf, AdapterUnavailable } from './core'
 import { unitLabel } from './catalogue'
 import { forgetCatalogue } from './quote'
 
@@ -22,6 +22,7 @@ export type RealOrder = {
   id: string; orderNumber: string; customer: { id: string; name: string; phone: string }
   items: Array<{ garmentId?: string; serviceId?: string; garmentTypeId?: string | null; vendorServiceId?: string | null; name: string; serviceName: string; categoryName?: string | null; unit: string; qty: number; ratePaise: number; amountPaise: number }>
   subtotalPaise: number; chargesPaise: number; discountsPaise: number; taxRateBps: number; taxPaise: number; totalPaise: number
+  priceBreakdown?: { charges?: any[]; discounts?: any[]; tax?: any } | null
   paymentMode: string | null; amountPaidPaise: number; paymentStatus: string; status: string; version: number; source: string
   orderDate: string; expectedDeliveryDate: string | null; fulfillmentMode: string | null; deliveryAddress: string | null; serviceZone: string | null
   notes: string | null; photoPath: string | null; pickupRider: { id: string; name: string; phone: string } | null
@@ -48,6 +49,7 @@ export function laundryOrder(order: RealOrder): LaundryOrder {
     taxRate: (order.taxRateBps || 0) / 100,
     taxAmount: rupees(order.taxPaise),
     grandTotal: rupees(order.totalPaise),
+    breakdown: breakdownOf(order.priceBreakdown, order),
     paymentMode: order.paymentMode ? MODE_LABEL[order.paymentMode] || order.paymentMode : 'Pay Later',
     paymentStatus: PAYMENT_LABEL[order.paymentStatus] || 'Unpaid',
     source: 'Counter',
@@ -75,6 +77,16 @@ type Detail = {
 
 const titleCase = (value: string) => value.charAt(0) + value.slice(1).toLowerCase()
 
+/** The customer receipt for an order: its lines and the labelled price breakdown, as calculated when it was booked. */
+export function receiptOf(order: LaundryOrder) {
+  return {
+    orderNumber: order.orderNumber, invoiceNumber: order.orderNumber, customer: { name: order.customer.name, phone: order.customer.phone },
+    orderDate: order.orderDate, expectedDeliveryDate: order.expectedDeliveryDate, fulfillmentMode: order.fulfillmentMode,
+    items: order.items, subtotal: order.subtotal, charges: order.charges, discounts: order.discounts, taxAmount: order.taxAmount, taxRate: order.taxRate,
+    breakdown: order.breakdown, grandTotal: order.grandTotal, paymentMode: order.paymentMode, paymentStatus: order.paymentStatus,
+  }
+}
+
 function detailShape(detail: Detail) {
   const base = laundryOrder(detail.order)
   const customer = { name: detail.order.customer.name, phone: detail.order.customer.phone }
@@ -94,6 +106,7 @@ function detailShape(detail: Detail) {
   }))
   return {
     ...base,
+    receipt: receiptOf(base),
     containerTags,
     physicalUnits: detail.units.map((unit) => ({
       id: unit.id, code: unit.tagCode, tagCode: unit.tagCode, orderId: base.id, orderNumber: base.orderNumber, customer,
@@ -146,12 +159,7 @@ route('POST', '/laundry/orders', async ({ post, body }) => {
   const order = laundryOrder(result.order)
   return {
     order: { id: order.id, orderNumber: order.orderNumber },
-    receipt: {
-      orderNumber: order.orderNumber, invoiceNumber: order.orderNumber, customer: { name: order.customer.name, phone: order.customer.phone },
-      orderDate: order.orderDate, expectedDeliveryDate: order.expectedDeliveryDate, fulfillmentMode: order.fulfillmentMode,
-      items: order.items, subtotal: order.subtotal, charges: order.charges, discounts: order.discounts, taxAmount: order.taxAmount,
-      grandTotal: order.grandTotal, paymentMode: order.paymentMode, paymentStatus: order.paymentStatus,
-    },
+    receipt: receiptOf(order),
     tags: result.tags || [],
     containerTags: result.containerTags || [],
   }

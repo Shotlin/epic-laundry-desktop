@@ -1,5 +1,7 @@
 import { lndryBrand } from "@/assets/generated/manifest";
-import { formatINR } from "@/lib/utils";
+import { formatINR, formatMoney } from "@/lib/utils";
+import type { PriceBreakdown } from "@/lib/laundry";
+import { summaryRows } from "@/lib/priceBreakdown";
 import { buildTagsHtml, deliverDocument, type DocumentOutcome } from "@/lib/tagOutput";
 
 export type PrintTag = {
@@ -45,6 +47,9 @@ export type PrintOrder = {
     charges: number;
     discounts: number;
     taxAmount: number;
+    taxRate?: number;
+    /** The labelled lines (e.g. "Discount (10%)") from the backend's calculation. */
+    breakdown?: PriceBreakdown;
     grandTotal: number;
     paymentMode?: string;
     paymentStatus?: string;
@@ -149,7 +154,7 @@ export async function buildLaundryPrintHtml(
     .join(" · ");
   const header = `<header>${logoMarkup}<div>${settings?.tagTemplate?.showStoreName !== false ? `<strong>${escapeHtml(businessName)}</strong>` : ""}<small>Local laundry operating desk</small>${contact ? `<small>${contact}</small>` : ""}</div></header>`;
   if (kind === "receipt") {
-    const body = `${header}<div class="eyebrow">Customer receipt</div><h1>${escapeHtml(order.invoiceNumber || order.orderNumber)}</h1><p class="muted">${escapeHtml(order.customer.name)}${order.customer.phone ? ` · ${escapeHtml(order.customer.phone)}` : ""} · Due ${escapeHtml(order.expectedDeliveryDate)}</p><div class="line-items">${order.receipt.items.map((item) => `<div><span>${escapeHtml(item.garmentName)} <small>${escapeHtml(item.serviceName)} · ${item.qty}</small></span><strong>${formatINR(item.amount)}</strong></div>`).join("")}</div><div class="totals"><div><span>Subtotal</span><span>${formatINR(order.receipt.subtotal)}</span></div><div><span>Adjustments</span><span>${formatINR(order.receipt.charges - order.receipt.discounts + order.receipt.taxAmount)}</span></div><div class="grand"><span>Total</span><strong>${formatINR(order.receipt.grandTotal)}</strong></div></div><p class="muted">${escapeHtml(order.receipt.paymentStatus || "")} · ${escapeHtml(order.receipt.paymentMode || "")}</p>`;
+    const body = `${header}<div class="eyebrow">Customer receipt</div><h1>${escapeHtml(order.invoiceNumber || order.orderNumber)}</h1><p class="muted">${escapeHtml(order.customer.name)}${order.customer.phone ? ` · ${escapeHtml(order.customer.phone)}` : ""} · Due ${escapeHtml(order.expectedDeliveryDate)}</p><div class="line-items">${order.receipt.items.map((item) => `<div><span>${escapeHtml(item.garmentName)} <small>${escapeHtml(item.serviceName)} · ${item.qty}</small></span><strong>${formatMoney(item.amount)}</strong></div>`).join("")}</div><div class="totals">${summaryRows({ subtotal: order.receipt.subtotal, charges: order.receipt.charges, discounts: order.receipt.discounts, taxAmount: order.receipt.taxAmount, taxRate: order.receipt.taxRate, breakdown: order.receipt.breakdown }).map((row) => `<div><span>${escapeHtml(row.label)}</span><span>${row.kind === "discount" ? "−" : ""}${formatMoney(row.amount)}</span></div>`).join("")}<div class="grand"><span>Grand total</span><strong>${formatMoney(order.receipt.grandTotal)}</strong></div></div><p class="muted">${escapeHtml(order.receipt.paymentStatus || "")} · ${escapeHtml(order.receipt.paymentMode || "")}</p>`;
     return documentHtml("Customer receipt", body, "receipt-page");
   }
   const tags = requestedTags || [];

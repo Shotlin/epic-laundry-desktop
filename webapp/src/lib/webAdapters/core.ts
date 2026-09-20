@@ -45,6 +45,28 @@ export function matchAdapter(method: Method, fullPath: string): { fn: Adapter; p
 
 export const rupees = (paise: unknown) => (Number(paise) || 0) / 100
 export const toPaise = (value: unknown) => Math.round((Number(value) || 0) * 100)
+
+type RawLine = { label?: unknown; percent?: unknown; amountPaise?: unknown }
+const line = (raw: RawLine) => ({ label: String(raw.label || ''), percent: raw.percent == null ? null : Number(raw.percent), amount: rupees(raw.amountPaise) })
+
+/**
+ * The backend's labelled price breakdown (paise) as rupees. An order booked before the breakdown was
+ * stored has only its totals, so plain lines are built from those — never an "Adjustment".
+ */
+export function breakdownOf(raw: { charges?: RawLine[]; discounts?: RawLine[]; tax?: RawLine | null } | null | undefined, totals: { chargesPaise: number; discountsPaise: number; taxPaise: number; taxRateBps: number }) {
+  if (raw) {
+    return {
+      charges: (raw.charges || []).map(line).filter((entry) => entry.amount > 0),
+      discounts: (raw.discounts || []).map(line).filter((entry) => entry.amount > 0),
+      tax: raw.tax && Number(raw.tax.amountPaise) > 0 ? line(raw.tax) : null,
+    };
+  }
+  return {
+    charges: totals.chargesPaise > 0 ? [{ label: 'Additional Charge', percent: null, amount: rupees(totals.chargesPaise) }] : [],
+    discounts: totals.discountsPaise > 0 ? [{ label: 'Discount', percent: null, amount: rupees(totals.discountsPaise) }] : [],
+    tax: totals.taxPaise > 0 ? { label: 'GST', percent: totals.taxRateBps ? totals.taxRateBps / 100 : null, amount: rupees(totals.taxPaise) } : null,
+  };
+}
 export const onlyDigits = (value: unknown) => String(value ?? '').replace(/\D/g, '')
 
 /** Real backend list endpoints sometimes return the array directly and sometimes wrap it — accept both. */

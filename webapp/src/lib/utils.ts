@@ -11,6 +11,21 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /** Format number as Indian Rupee: ₹1,24,500 */
+/**
+ * A bill amount exactly as calculated: whole rupees show without decimals (₹390), anything with paise
+ * shows both (₹66.78, ₹437.78). Unlike formatINR it never rounds a total like 437.78 to ₹438.
+ */
+export function formatMoney(amount: number): string {
+  const rounded = Math.round((Number(amount) || 0) * 100) / 100;
+  const hasPaise = Math.round(rounded * 100) % 100 !== 0;
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: hasPaise ? 2 : 0,
+    maximumFractionDigits: 2,
+  }).format(rounded);
+}
+
 export function formatINR(amount: number): string {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",

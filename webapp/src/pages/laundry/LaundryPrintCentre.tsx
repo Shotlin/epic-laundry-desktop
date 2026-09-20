@@ -19,7 +19,8 @@ import {
   type PrintSettings,
   type PrintTag,
 } from "@/lib/laundryPrint";
-import { formatINR } from "@/lib/utils";
+import { formatINR, formatMoney } from "@/lib/utils";
+import { summaryRows } from "@/lib/priceBreakdown";
 import VisualEmptyState from "@/components/laundry/VisualEmptyState";
 import { TagFormatBar, TagLabelPreview } from "@/components/laundry/TagFormatBar";
 import {
@@ -745,13 +746,25 @@ function InvoicePreview({
         ))}
       </div>
       <div className="mt-4 border-t border-[#263f44]/10 pt-3">
-        <div className="flex justify-between text-sm">
-          <span>Subtotal</span>
-          <span>{formatINR(order.receipt.subtotal)}</span>
-        </div>
+        {summaryRows({
+          subtotal: order.receipt.subtotal,
+          charges: order.receipt.charges,
+          discounts: order.receipt.discounts,
+          taxAmount: order.receipt.taxAmount,
+          taxRate: order.receipt.taxRate,
+          breakdown: order.receipt.breakdown,
+        }).map((row, index) => (
+          <div key={row.key} className={`flex justify-between text-sm ${index > 0 ? "mt-1" : ""}`}>
+            <span>{row.label}</span>
+            <span className="tabular-nums">
+              {row.kind === "discount" ? "−" : ""}
+              {formatMoney(row.amount)}
+            </span>
+          </div>
+        ))}
         <div className="mt-2 flex justify-between border-t border-[#263f44]/10 pt-2 font-serif text-xl">
-          <span>Total</span>
-          <span>{formatINR(order.receipt.grandTotal)}</span>
+          <span>Grand total</span>
+          <span className="tabular-nums">{formatMoney(order.receipt.grandTotal)}</span>
         </div>
       </div>
     </div>

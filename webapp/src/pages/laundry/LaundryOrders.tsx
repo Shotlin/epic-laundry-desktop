@@ -39,7 +39,7 @@ import {
   type LaundryPaymentSummary,
   type LaundryState,
 } from "@/lib/laundry";
-import { cn, formatINR } from "@/lib/utils";
+import { cn, formatINR, formatMoney } from "@/lib/utils";
 import OrderItemEditor from "@/components/laundry/OrderItemEditor";
 import VisualEmptyState from "@/components/laundry/VisualEmptyState";
 
@@ -527,7 +527,7 @@ function CustomerWorkCardDrawer({ id, onClose, onOpenOrder }: { id: string; onCl
         </div> : null}
         {section === "orders" ? <div className="space-y-2 px-5 py-4">{profile.data.orders.length ? <>
           <p className="px-1 text-[11px] leading-4 text-[#746d82]">Invoice and order details stay in this customer profile. Select the eye only when you want the separate full order work card.</p>
-          {profile.data.orders.map((order) => <article key={order.id} className="rounded-2xl border border-[#272043]/10 bg-white p-3 transition hover:border-brand-200 hover:bg-brand-50/20"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate font-bold text-[#332849]">{order.invoice || order.orderNumber}</p><p className="mt-1 text-xs text-[#746d82]">{order.invoice ? order.orderNumber : "No invoice yet"} · {date(order.orderDate)} · {order.paymentStatus}</p></div><div className="flex shrink-0 items-center gap-2"><StatePill state={order.state as LaundryState} /><button type="button" onClick={() => onOpenOrder(order.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-brand-200 bg-white text-brand-700 transition hover:bg-brand-600 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2" aria-label={`View order ${order.invoice || order.orderNumber}`} title="Open full order work card"><Eye className="h-4 w-4" /></button></div></div><div className="mt-3 flex items-center justify-between border-t border-[#272043]/8 pt-2 text-xs"><span className="text-[#746d82]">{order.expectedDeliveryDate ? `Due ${date(order.expectedDeliveryDate)}` : "No due date"}</span><span className="font-bold tabular-nums text-[#332849]">{formatINR(order.grandTotal)}</span></div></article>)}
+          {profile.data.orders.map((order) => <article key={order.id} className="rounded-2xl border border-[#272043]/10 bg-white p-3 transition hover:border-brand-200 hover:bg-brand-50/20"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate font-bold text-[#332849]">{order.invoice || order.orderNumber}</p><p className="mt-1 text-xs text-[#746d82]">{order.invoice ? order.orderNumber : "No invoice yet"} · {date(order.orderDate)} · {order.paymentStatus}</p></div><div className="flex shrink-0 items-center gap-2"><StatePill state={order.state as LaundryState} /><button type="button" onClick={() => onOpenOrder(order.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-brand-200 bg-white text-brand-700 transition hover:bg-brand-600 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2" aria-label={`View order ${order.invoice || order.orderNumber}`} title="Open full order work card"><Eye className="h-4 w-4" /></button></div></div><div className="mt-3 flex items-center justify-between border-t border-[#272043]/8 pt-2 text-xs"><span className="text-[#746d82]">{order.expectedDeliveryDate ? `Due ${date(order.expectedDeliveryDate)}` : "No due date"}</span><span className="font-bold tabular-nums text-[#332849]">{formatMoney(order.grandTotal)}</span></div></article>)}
         </> : <VisualEmptyState kind="orders" compact title="No orders for this customer" detail="The booking history will appear here after the first order." />}</div> : null}
         {section === "ledger" ? <div className="space-y-2 px-5 py-4">{profile.data.ledger.length ? profile.data.ledger.slice(0, 12).map((entry) => <div key={entry.id} className="rounded-xl border border-[#272043]/10 bg-white px-3 py-3"><div className="flex justify-between gap-3"><div><p className="text-xs font-bold text-[#352b4b]">{entry.entryType}</p><p className="mt-1 text-[11px] text-[#7a7388]">{entry.reason || entry.referenceId || "Customer ledger entry"}</p></div><div className="text-right text-xs tabular-nums"><p className={entry.debit ? "font-bold text-rose-700" : "font-bold text-emerald-700"}>{entry.debit ? `−${formatINR(entry.debit)}` : `+${formatINR(entry.credit)}`}</p><p className="mt-1 text-[10px] text-[#8a8397]">{date(entry.entryDate)}</p></div></div></div>) : <VisualEmptyState kind="finance" compact title="No ledger entries" detail="Payments, invoices, credits and wallet activity will be listed here." />}</div> : null}
       </div>}
@@ -687,7 +687,7 @@ function OrderRow({
         </span>
       </td>
       <td className="px-3 py-4 font-bold tabular-nums">
-        {formatINR(order.grandTotal)}
+        {formatMoney(order.grandTotal)}
       </td>
       <td className="px-3 py-4">
         <StatePill state={order.state} />
@@ -1129,7 +1129,7 @@ function OrderDetail({
           {summary?.status || order.paymentStatus} · {order.paymentMode}
         </span>
         <span className="font-serif text-xl">
-          {formatINR(summary?.total ?? order.grandTotal)}
+          {formatMoney(summary?.total ?? order.grandTotal)}
         </span>
       </div>
       <div className="mt-4 rounded-xl bg-[#eaf3ef] p-3 text-xs text-[#32695f]">
@@ -1281,7 +1281,7 @@ function OrderDetail({
           </p>
           {summary && (
             <span className="text-xs font-bold text-[#4b3bb0]">
-              {formatINR(summary.outstanding)} due
+              {formatMoney(summary.outstanding)} due
             </span>
           )}
         </div>
@@ -1289,11 +1289,11 @@ function OrderDetail({
           <div className="mt-2 grid grid-cols-3 gap-1.5 text-center text-xs">
             <div className="rounded-lg bg-white p-2">
               <span className="block text-[#7b739d]">Total</span>
-              <strong>{formatINR(summary.total)}</strong>
+              <strong>{formatMoney(summary.total)}</strong>
             </div>
             <div className="rounded-lg bg-white p-2">
               <span className="block text-[#7b739d]">Paid</span>
-              <strong>{formatINR(summary.paid)}</strong>
+              <strong>{formatMoney(summary.paid)}</strong>
             </div>
             <div className="rounded-lg bg-white p-2">
               <span className="block text-[#7b739d]">Status</span>
