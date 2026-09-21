@@ -45,6 +45,9 @@ const LaundryManagement = lazy(() => import("@/pages/laundry/LaundryManagement")
 const LaundryReturns = lazy(() => import("@/pages/laundry/LaundryReturns"));
 const LaundryFinanceSetup = lazy(() => import("@/pages/laundry/LaundryFinanceSetup"));
 const LaundryStatutoryFinance = lazy(() => import("@/pages/laundry/LaundryStatutoryFinance"));
+// The website reads Finance / Statutory from the real backend report (channel + period filters); the desktop keeps its own pages.
+const LaundryWebFinance = lazy(() => import("@/pages/laundry/LaundryWebFinance"));
+const LaundryWebStatutory = lazy(() => import("@/pages/laundry/LaundryWebStatutory"));
 
 export function App() {
   return (
@@ -56,8 +59,8 @@ export function App() {
         <Route index element={<Navigate to="dashboard" replace />} />
         <Route path="dashboard" element={<PermissionGate permission="orders.read"><LaundryDashboard /></PermissionGate>} />
         <Route path="operations" element={<PermissionGate permission="orders.read"><LaundryOperationsHub /></PermissionGate>} />
-        <Route path="finance" element={<PermissionGate permission="settings.manage"><LaundryFinanceCommandCenter /></PermissionGate>} />
-        <Route path="finance/statutory" element={<PermissionGate permission="settings.manage"><LaundryStatutoryFinance /></PermissionGate>} />
+        <Route path="finance" element={<PermissionGate permission="settings.manage">{isWebOnly ? <LaundryWebFinance /> : <LaundryFinanceCommandCenter />}</PermissionGate>} />
+        <Route path="finance/statutory" element={<PermissionGate permission="settings.manage">{isWebOnly ? <LaundryWebStatutory /> : <LaundryStatutoryFinance />}</PermissionGate>} />
         <Route path="management" element={<PermissionGate permission="settings.manage"><LaundryManagement /></PermissionGate>} />
         <Route path="finance-setup" element={<PermissionGate permission="settings.manage"><LaundryFinanceSetup /></PermissionGate>} />
         <Route path="customers" element={<PermissionGate permission="customers.read"><LaundryCustomers /></PermissionGate>} />
