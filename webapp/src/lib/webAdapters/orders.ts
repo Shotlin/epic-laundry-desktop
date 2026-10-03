@@ -172,18 +172,67 @@ route('POST', '/laundry/orders', async ({ post, body }) => {
 })
 
 // ── Listing and detail ────────────────────────────────────────────────────
+// The Orders page sends its filters (status, phone, order no., customer, source, dashboard queue).
+// The backend list takes only state/search/date, so the rest are applied here on the fetched page of orders.
+const STATUS_FILTER: Record<string, (order: LaundryOrder) => boolean> = {
+  booked: (o) => o.state === 'Booked',
+  'in-process': (o) => o.state === 'In Process',
+  delivered: (o) => o.state === 'Delivered',
+  cancelled: (o) => o.state === 'Cancelled',
+  done: (o) => o.state === 'Ready',
+  'partially-delivered': () => false, // counter orders are delivered whole
+  'pickup-assigned': (o) => o.state === 'Booked' && Boolean(o.pickupRider),
+  'pickup-received': (o) => o.state === 'Picked Up',
+  'out-for-delivery': (o) => o.state === 'Out for Delivery',
+}
+const CLOSED_STATES = new Set(['Delivered', 'Cancelled'])
+const day = (value: unknown) => String(value || '').slice(0, 10)
+function queueMatches(queue: string, order: LaundryOrder, today: string, soon: string): boolean {
+  switch (queue) {
+    case 'pending': return !CLOSED_STATES.has(order.state)
+    case 'booking': return order.state === 'Booked'
+    case 'delivery': return order.state === 'Out for Delivery'
+    case 'delivered': return order.state === 'Delivered'
+    case 'pickup-unassigned': return order.state === 'Booked' && !order.pickupRider
+    case 'delivery-due': return !CLOSED_STATES.has(order.state) && day(order.expectedDeliveryDate) <= soon
+    case 'delivery-unassigned': return (order.state === 'Ready' || order.state === 'Out for Delivery') && order.fulfillmentMode === 'Delivery Order' && !order.deliveryRider
+    case 'express': return false // the counter has no express orders
+    default: return true
+  }
+}
+function filterOrders(all: LaundryOrder[], query: URLSearchParams): LaundryOrder[] {
+  const phone = onlyDigits(query.get('phone'))
+  const orderNo = String(query.get('orderNo') || '').trim().toLowerCase()
+  const customer = String(query.get('customer') || '').trim().toLowerCase()
+  const statuses = String(query.get('status') || '').split(',').map((value) => value.trim()).filter((value) => value in STATUS_FILTER)
+  const source = query.get('source')
+  const queue = query.get('queue')
+  const today = new Date().toISOString().slice(0, 10)
+  const soon = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)
+  return all.filter((order) => {
+    if (phone && !onlyDigits(order.customer.phone).includes(phone)) return false
+    if (orderNo && !order.orderNumber.toLowerCase().includes(orderNo)) return false
+    if (customer && !String(order.customer.name || '').toLowerCase().includes(customer)) return false
+    if (statuses.length && !statuses.some((status) => STATUS_FILTER[status](order))) return false
+    if (source && source !== 'all' && order.source !== source) return false
+    if (queue && !queueMatches(queue, order, today, soon)) return false
+    return true
+  })
+}
 route('GET', '/laundry/orders', async ({ get, query }) => {
   const params = new URLSearchParams()
   const state = query.get('state'); if (state) params.set('status', stateToWire(state))
   for (const key of ['search', 'from', 'to']) { const value = query.get(key); if (value) params.set(key, value) }
   params.set('limit', '500')
-  const all = (listOf(await get(`/vendor/counter/orders?${params}`)) as RealOrder[]).map(laundryOrder)
+  const all = filterOrders((listOf(await get(`/vendor/counter/orders?${params}`)) as RealOrder[]).map(laundryOrder), query)
   // Callers that do not paginate (Print Centre search) expect the bare list.
   if (!query.get('page')) return all
   const pageSize = Math.max(1, Number(query.get('pageSize')) || 50)
   const page = Math.max(1, Number(query.get('page')) || 1)
   return { items: all.slice((page - 1) * pageSize, page * pageSize), total: all.length, page, pageSize, totalPages: Math.max(1, Math.ceil(all.length / pageSize)) }
 })
+// Must be registered before '/laundry/orders/:id', which would otherwise read "filter-options" as an order id.
+route('GET', '/laundry/orders/filter-options', async () => ({ sources: ['Counter'], reporters: [] as string[] }))
 
 route('GET', '/laundry/orders/:id', async ({ get, params }) => detailShape(await get(`/vendor/counter/orders/${params.id}`)))
 
@@ -291,6 +340,23 @@ route('GET', '/laundry/customer-insights', async ({ get }) => {
   }
 })
 
+
+// ── Customer details saved by this store (vendor-private; the shared LNDRY account is never changed) ──
+type RealAddress = { id: string; label: string; addressLine1: string; addressLine2: string; city: string; state: string; pincode: string; isDefault: boolean }
+const addressOut = (a: RealAddress) => ({ id: a.id, label: a.label, line1: a.addressLine1, line2: a.addressLine2 || '', city: a.city || '', state: a.state || '', postalCode: a.pincode || '', isDefault: a.isDefault, active: true })
+const addressLine = (a?: RealAddress) => (a ? [a.addressLine1, a.addressLine2, a.city, a.state, a.pincode].filter(Boolean).join(', ') : '')
+const addressIn = (d: any) => ({ label: d.label, addressLine1: d.line1, addressLine2: d.line2, city: d.city, state: d.state, pincode: d.postalCode, isDefault: d.isDefault === true })
+
+route('PATCH', '/laundry/customers/:id', async ({ patch, get, params, body }) => {
+  const saved = await patch(`/vendor/customer-profiles/${params.id}`, { name: body.name, email: body.email, notes: body.notes })
+  const addresses = (await get(`/vendor/customer-profiles/${params.id}/addresses`).catch(() => ({ addresses: [] }))).addresses as RealAddress[]
+  const phone = onlyDigits(body.phone)
+  return { id: params.id, name: saved.profile.displayName || body.name || '', phone: phone || body.phone || '', email: saved.profile.email || '', address: addressLine(addresses[0]), notes: saved.profile.notes || '' }
+})
+route('POST', '/laundry/customers/:id/addresses', async ({ post, params, body }) => addressOut((await post(`/vendor/customer-profiles/${params.id}/addresses`, addressIn(body))).address))
+route('PATCH', '/laundry/customers/:id/addresses/:addressId', async ({ patch, params, body }) => addressOut((await patch(`/vendor/customer-profiles/${params.id}/addresses/${params.addressId}`, addressIn(body))).address))
+route('POST', '/laundry/customers/:id/addresses/:addressId/archive', async ({ post, params }) => post(`/vendor/customer-profiles/${params.id}/addresses/${params.addressId}/archive`, {}))
+
 route('GET', '/laundry/customers/:id', async ({ get, params }) => {
   const profile = await get(`/vendor/counter/customers/${params.id}`)
   const sourceOrders = Array.isArray(profile.orders) ? profile.orders as RealOrder[] : []
@@ -308,14 +374,14 @@ route('GET', '/laundry/customers/:id', async ({ get, params }) => {
     return counts
   }, {})
   return {
-    customer: { id: profile.customer.id, name: profile.customer.name || '', phone: profile.customer.phone || '', email: profile.customer.email || '', address: '', notes: '', preferredContact: undefined, servicePreferences: undefined, marketingConsent: undefined },
+    customer: { id: profile.customer.id, name: profile.customer.name || '', phone: profile.customer.phone || '', email: profile.customer.email || '', address: addressLine(profile.addresses?.[0]), notes: profile.notes || '', preferredContact: undefined, servicePreferences: undefined, marketingConsent: undefined },
     metrics: {
       revenue: rupees(active.reduce((sum, order) => sum + order.totalPaise, 0)),
       orderBalance: rupees(active.reduce((sum, order) => sum + Math.max(0, order.totalPaise - order.amountPaidPaise), 0)),
       lastVisit: active[0]?.placedAt ? String(active[0].placedAt).slice(0, 10) : null,
       orderStatus,
     },
-    addresses: [],
+    addresses: (profile.addresses || []).map(addressOut),
     orders,
     consents: [],
     marketplace: { links: [], orders: [] },
@@ -323,6 +389,6 @@ route('GET', '/laundry/customers/:id', async ({ get, params }) => {
     wallet: [],
     rewards: [],
     timeline: active.slice(0, 10).map((order) => ({ at: order.placedAt, type: 'order', label: `Order ${order.orderNumber} booked`, amount: rupees(order.totalPaise), reason: '' })),
-    reconciliation: { note: 'This connected profile feed includes order totals and order activity only. Wallet, rewards, customer ledger, saved addresses, and package details are not provided here.' },
+    reconciliation: { note: 'This connected profile feed includes order totals, order activity and the details and addresses saved by this store. LNDRY wallet, rewards and package details are not shown here.' },
   }
 })

@@ -398,7 +398,7 @@ function CustomerWorkCard({ id }: { id: string }) {
         : apiGet<{ user: { roles: string[] } | null }>("/auth/session"),
   });
   const roles = session.data?.user?.roles;
-  const canEditCustomer = !isWebOnly && canUseUi(roles, "customers.edit");
+  const canEditCustomer = canUseUi(roles, "customers.edit");
   const canManageMarketplace = !isWebOnly && canUseUi(roles, "settings.manage");
   const canManagePrivacy = !isWebOnly && canUseUi(roles, "settings.manage");
   const canManageWallet = !isWebOnly && canUseUi(roles, "wallet.manage");
@@ -585,8 +585,8 @@ function CustomerWorkCard({ id }: { id: string }) {
     <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
       {isWebOnly ? (
         <p className="rounded-xl border border-[#d8c08a] bg-[#fffaf0] px-4 py-3 text-sm leading-5 text-[#6f6248]">
-          This profile is read-only in the connected workspace. Some Epic
-          customer details and account tools are not provided by this connection.
+          Name, e-mail, notes and addresses you save here are kept by your store only — the customer's own LNDRY account is never changed.
+          LNDRY wallet, rewards and privacy tools are not part of the website.
         </p>
       ) : null}
       <button
@@ -818,11 +818,7 @@ function CustomerWorkCard({ id }: { id: string }) {
                 {data.addresses.filter((address) => address.active).length}
               </span>
             </div>
-            {isWebOnly ? (
-              <p className="mt-4 rounded-lg bg-[#f8faf7] p-3 text-xs leading-5 text-[#617178]">
-                Saved address details are not included in this connected profile feed.
-              </p>
-            ) : <div className="mt-4 space-y-2">
+            <div className="mt-4 space-y-2">
               {data.addresses
                 .filter((address) => address.active)
                 .map((address) => (
@@ -888,7 +884,7 @@ function CustomerWorkCard({ id }: { id: string }) {
                   />
                 </div>
               ) : null}
-            </div>}
+            </div>
             {addressEditor && canEditCustomer ? (
               <AddressEditor
                 initial={addressEditor}

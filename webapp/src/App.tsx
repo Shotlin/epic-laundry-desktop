@@ -6,6 +6,7 @@ import { canUseUi, type UiPermission } from "@/lib/permissions";
 import { useQuery } from "@tanstack/react-query";
 import { apiGet } from "@/lib/api";
 import { isWebOnly, sessionFromStoredCloud } from "@/lib/cloudAuth";
+import NotOnWeb from "@/components/laundry/NotOnWeb";
 
 // Operational pages are independently loaded. A counter opening the dashboard
 // should not pay the startup cost of reports, statutory controls, imports, or
@@ -71,7 +72,7 @@ export function App() {
         <Route path="finance" element={<PermissionGate permission="settings.manage">{isWebOnly ? <LaundryWebFinance /> : <LaundryFinanceCommandCenter />}</PermissionGate>} />
         <Route path="finance/statutory" element={<PermissionGate permission="settings.manage">{isWebOnly ? <LaundryWebStatutory /> : <LaundryStatutoryFinance />}</PermissionGate>} />
         <Route path="management" element={<PermissionGate permission="settings.manage"><LaundryManagement /></PermissionGate>} />
-        <Route path="finance-setup" element={<PermissionGate permission="settings.manage"><LaundryFinanceSetup /></PermissionGate>} />
+        <Route path="finance-setup" element={<PermissionGate permission="settings.manage">{isWebOnly ? <NotOnWeb title="Finance setup" reason="Legal-entity, PAN/TAN and statutory ledger setup is only used by the desktop accounting module. Your GST and finance reports are on the Finance and Statutory pages." /> : <LaundryFinanceSetup />}</PermissionGate>} />
         <Route path="customers" element={<PermissionGate permission="customers.read"><LaundryCustomers /></PermissionGate>} />
         <Route path="customers/:id" element={<PermissionGate permission="customers.read"><LaundryCustomers /></PermissionGate>} />
         <Route path="packages" element={<PermissionGate permission="packages.read"><LaundryPackages /></PermissionGate>} />
@@ -80,10 +81,10 @@ export function App() {
         <Route path="orders/:id" element={<PermissionGate permission="orders.read"><LaundryOrders /></PermissionGate>} />
         <Route path="online-orders" element={<PermissionGate permission="orders.read"><LaundryOnlineOrders /></PermissionGate>} />
         <Route path="marketplace-catalogue" element={<PermissionGate permission="catalogue.read"><LaundryMarketplaceCatalogue /></PermissionGate>} />
-        <Route path="platform-control" element={<PermissionGate permission="settings.manage"><LaundryPlatformControl /></PermissionGate>} />
-        <Route path="platform-orders" element={<PermissionGate permission="settings.manage"><LaundryPlatformOrders /></PermissionGate>} />
-        <Route path="platform-audit" element={<PermissionGate permission="settings.manage"><LaundryPlatformAudit /></PermissionGate>} />
-        <Route path="platform-finance" element={<PermissionGate permission="settings.manage"><LaundryPlatformFinance /></PermissionGate>} />
+        <Route path="platform-control" element={<PermissionGate permission="settings.manage">{isWebOnly ? <NotOnWeb title="Platform Control" reason="LNDRY platform administration is done by the LNDRY team in the admin dashboard, not from a shop website." /> : <LaundryPlatformControl />}</PermissionGate>} />
+        <Route path="platform-orders" element={<PermissionGate permission="settings.manage">{isWebOnly ? <NotOnWeb title="Platform orders" reason="LNDRY platform administration is done by the LNDRY team in the admin dashboard, not from a shop website." /> : <LaundryPlatformOrders />}</PermissionGate>} />
+        <Route path="platform-audit" element={<PermissionGate permission="settings.manage">{isWebOnly ? <NotOnWeb title="Platform audit trail" reason="LNDRY platform administration is done by the LNDRY team in the admin dashboard, not from a shop website." /> : <LaundryPlatformAudit />}</PermissionGate>} />
+        <Route path="platform-finance" element={<PermissionGate permission="settings.manage">{isWebOnly ? <NotOnWeb title="Platform finance" reason="LNDRY platform administration is done by the LNDRY team in the admin dashboard, not from a shop website." /> : <LaundryPlatformFinance />}</PermissionGate>} />
         <Route path="sync-status" element={<PermissionGate permission="settings.manage"><LaundrySyncStatus /></PermissionGate>} />
         <Route path="garment-tracking" element={<PermissionGate permission="garments.read"><LaundryGarmentTracking /></PermissionGate>} />
         <Route path="cash-closing" element={<PermissionGate permission="cash.read"><LaundryCashClosing /></PermissionGate>} />

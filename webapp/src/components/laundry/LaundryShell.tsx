@@ -11,7 +11,7 @@ import { isWebOnly, sessionFromStoredCloud, clearStoredSession } from '@/lib/clo
 import { CommandPalette } from '@/components/layout/CommandPalette'
 import { canUseUi, type UiPermission } from '@/lib/permissions'
 
-const navigation: Array<{ to: string; label: string; icon: typeof LayoutDashboard; permission: UiPermission }> = [
+const allNavigation: Array<{ to: string; label: string; icon: typeof LayoutDashboard; permission: UiPermission }> = [
   { to: '/laundry/dashboard', label: 'Dashboard', icon: LayoutDashboard, permission: 'orders.read' },
   { to: '/laundry/statistics', label: 'Overview', icon: BarChart3, permission: 'orders.read' },
   { to: '/laundry/operations', label: 'Operations centre', icon: Wrench, permission: 'orders.read' },
@@ -47,6 +47,11 @@ const navigation: Array<{ to: string; label: string; icon: typeof LayoutDashboar
   { to: '/laundry/catalogue', label: 'Garments & prices', icon: Shirt, permission: 'catalogue.read' },
   { to: '/laundry/settings', label: 'Store settings', icon: Settings2, permission: 'settings.manage' },
 ]
+
+// LNDRY platform administration lives in the LNDRY admin dashboard, and the desktop's finance-setup ledger has no
+// counterpart on the LNDRY backend — neither belongs in a shop's website.
+const webHiddenScreens = new Set(['/laundry/platform-control', '/laundry/platform-orders', '/laundry/platform-audit', '/laundry/platform-finance', '/laundry/finance-setup'])
+const navigation = isWebOnly ? allNavigation.filter((item) => !webHiddenScreens.has(item.to)) : allNavigation
 
 const navigationGroups: Array<{ id: string; label: string; items: typeof navigation }> = [
   { id: 'home', label: 'Home', items: navigation.filter((item) => ['/laundry/dashboard', '/laundry/statistics'].includes(item.to)) },
@@ -86,9 +91,10 @@ export function LaundryShell() {
   // workspace mode is always 'production' (no demo/local-bootstrap concept
   // over the real backend), and notifications have no real-backend
   // equivalent yet (a genuine, flagged gap, not silently assumed working).
+  // (Update: the bell now reads the user's own LNDRY inbox through a web adapter — see webAdapters/inbox.ts.)
   const session = useQuery({ queryKey: ['auth-session'], queryFn: () => isWebOnly ? Promise.resolve(sessionFromStoredCloud()) : apiGet<Session>('/auth/session') })
   const workspace = useQuery({ queryKey: ['workspace-mode'], queryFn: () => window.epic?.workspaceStatus?.() || (isWebOnly ? Promise.resolve({ mode: 'production' as const }) : apiGet<{ mode: 'production' | 'demo' }>('/workspace/status')) })
-  const notifications = useQuery({ queryKey: ['notifications'], queryFn: () => isWebOnly ? Promise.resolve([] as NotificationItem[]) : apiGet<NotificationItem[]>('/notifications') })
+  const notifications = useQuery({ queryKey: ['notifications'], queryFn: () => apiGet<NotificationItem[]>('/notifications') })
   const markRead = useMutation({ mutationFn: (id: string) => apiPost(`/notifications/${id}/read`, { read: true }), onSuccess: () => notifications.refetch() })
   const signOut = useMutation({ mutationFn: () => isWebOnly ? Promise.resolve(clearStoredSession()) : apiPost('/auth/sign-out'), onSuccess: () => window.location.assign('/ui/app/') })
   const resetDemo = useMutation({ mutationFn: () => window.epic?.resetDemoWorkspace?.() || Promise.reject(new Error('Demo reset is only available in the desktop application.')) })

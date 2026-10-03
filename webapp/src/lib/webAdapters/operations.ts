@@ -1,16 +1,17 @@
-// Route planning (kept in this browser), team attendance (real), management snapshot, HR lists.
+// Route planning (saved on the server), team attendance (real), management snapshot, HR lists.
 import { route, listOf, rupees } from './core'
 import { laundryOrder, type RealOrder } from './orders'
+import { ensureServerSettings, saveSetting, settingValue } from './serverSettings'
 
-const ROUTE_KEY = 'epic-web-routes-v1'
 type Stop = { id: string; sequence: number; orderId: string; orderNumber: string; address: string; estimatedAt?: string; status: string; note: string }
 type Run = { id: string; riderId: string; riderName: string; routeDate: string; stage: 'Pickup' | 'Delivery'; zone?: string; startTime?: string; minutesPerStop?: number; status: string; stopCount: number; notes: string; stops: Stop[] }
-const readRuns = (): Run[] => { try { return JSON.parse(window.localStorage.getItem(ROUTE_KEY) || '[]') } catch { return [] } }
-const writeRuns = (runs: Run[]) => { try { window.localStorage.setItem(ROUTE_KEY, JSON.stringify(runs)) } catch { /* not persisted */ } }
+// Route runs are saved on the server (serverSettings.ts) so every computer of the shop sees the same plan.
+const readRuns = async (get: (path: string) => Promise<any>): Promise<Run[]> => { await ensureServerSettings(get); const runs = settingValue<Run[]>('route-runs', []); return Array.isArray(runs) ? runs : [] }
+const writeRuns = (put: (path: string, body?: unknown) => Promise<any>, runs: Run[]) => saveSetting({ put }, 'route-runs', runs)
 const withCount = (run: Run): Run => ({ ...run, stopCount: run.stops.length })
 
-route('GET', '/laundry/routes', async () => readRuns().map(withCount))
-route('POST', '/laundry/routes', async ({ get, body }) => {
+route('GET', '/laundry/routes', async ({ get }) => (await readRuns(get)).map(withCount))
+route('POST', '/laundry/routes', async ({ get, put, body }) => {
   const [captains, orders] = await Promise.all([
     get('/vendor/employees?role=VENDOR_RIDER').then((data) => listOf(data, 'staff') as any[]),
     get('/vendor/counter/orders?limit=300').then((data) => (listOf(data) as RealOrder[]).map(laundryOrder)),
@@ -26,20 +27,20 @@ route('POST', '/laundry/routes', async ({ get, body }) => {
     status: 'Planned', stopCount: chosen.length, notes: '',
     stops: chosen.map((order, index) => { const at = base + index * minutes; return { id: crypto.randomUUID(), sequence: index + 1, orderId: order.id, orderNumber: order.orderNumber, address: order.deliveryAddress || 'Address not recorded', estimatedAt: `${String(Math.floor(at / 60) % 24).padStart(2, '0')}:${String(at % 60).padStart(2, '0')}`, status: 'Pending', note: '' } }),
   }
-  writeRuns([run, ...readRuns()]); return run
+  await writeRuns(put, [run, ...(await readRuns(get))]); return run
 })
-route('POST', '/laundry/routes/:id/start', async ({ params }) => {
-  const runs = readRuns().map((run) => (run.id === params.id ? { ...run, status: 'In progress' } : run)); writeRuns(runs); return runs.find((run) => run.id === params.id)
+route('POST', '/laundry/routes/:id/start', async ({ get, put, params }) => {
+  const runs = (await readRuns(get)).map((run) => (run.id === params.id ? { ...run, status: 'In progress' } : run)); await writeRuns(put, runs); return runs.find((run) => run.id === params.id)
 })
-route('POST', '/laundry/routes/:id/stops/:stopId/complete', async ({ params, body }) => {
-  const runs = readRuns().map((run) => {
+route('POST', '/laundry/routes/:id/stops/:stopId/complete', async ({ get, put, params, body }) => {
+  const runs = (await readRuns(get)).map((run) => {
     if (run.id !== params.id) return run
     const stops = run.stops.map((stop) => (stop.id === params.stopId ? { ...stop, status: body.status, note: body.note || '' } : stop))
     return { ...run, stops, status: stops.every((stop) => stop.status !== 'Pending') ? 'Completed' : run.status }
-  }); writeRuns(runs); return runs.find((run) => run.id === params.id)
+  }); await writeRuns(put, runs); return runs.find((run) => run.id === params.id)
 })
 route('GET', '/laundry/route-analytics', async ({ get }) => {
-  const runs = readRuns(); const orders = (await get('/vendor/counter/orders?limit=300').then((data) => listOf(data) as RealOrder[]).catch(() => [] as RealOrder[])).map(laundryOrder).filter((order) => !['Delivered', 'Cancelled'].includes(order.state))
+  const runs = await readRuns(get); const orders = (await get('/vendor/counter/orders?limit=300').then((data) => listOf(data) as RealOrder[]).catch(() => [] as RealOrder[])).map(laundryOrder).filter((order) => !['Delivered', 'Cancelled'].includes(order.state))
   const stops = runs.flatMap((run) => run.stops); const completed = stops.filter((stop) => stop.status === 'Completed').length; const skipped = stops.filter((stop) => stop.status === 'Skipped').length
   const zones = new Map<string, { orders: number; pickupReady: number; deliveryReady: number; assigned: number; activeRuns: number }>()
   for (const order of orders) { const key = order.serviceZone || 'Unzoned'; const z = zones.get(key) || { orders: 0, pickupReady: 0, deliveryReady: 0, assigned: 0, activeRuns: 0 }; z.orders += 1; if (['Booked', 'Picked Up'].includes(order.state)) z.pickupReady += 1; if (['Ready', 'Out for Delivery'].includes(order.state)) z.deliveryReady += 1; if (order.pickupRider || order.deliveryRider) z.assigned += 1; zones.set(key, z) }

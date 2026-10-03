@@ -646,7 +646,7 @@ export default function LaundrySettings() {
       setForm((current) => ({ ...current, ...data }));
       setQrPreview("");
       setQrPreviewDraftKey("");
-      setNotice(isWebOnly ? "UPI / invoice QR settings saved in this browser for this branch." : "UPI / invoice QR settings updated.");
+      setNotice("UPI / invoice QR settings updated.");
     },
     onError: (error: Error) => setNotice(error.message || "Could not update UPI / invoice QR settings."),
   });
@@ -1470,7 +1470,6 @@ export default function LaundrySettings() {
                 <div>
                   <h3 className="text-sm font-extrabold text-[#241a45]">UPI / Invoice QR</h3>
                   <p className="mt-1 max-w-2xl text-xs leading-5 text-[#718087]">Enter this branch’s UPI ID, generate a preview, then choose Update to use it on printed invoices.</p>
-                  {isWebOnly ? <p className="mt-3 rounded-xl border border-[#f0e1b4] bg-[#fffaf0] px-3 py-2 text-xs leading-5 text-[#74591d]">These settings stay in this browser for this branch and do not sync to other devices yet.</p> : null}
                 </div>
                 <label className="block text-sm font-semibold text-[#31484d]">
                   UPI ID

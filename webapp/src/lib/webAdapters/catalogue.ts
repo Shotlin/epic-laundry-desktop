@@ -5,6 +5,7 @@ import type { LaundryCatalogue } from '../laundry'
 import { route, rupees, toPaise, listOf } from './core'
 import { forgetCatalogue } from './quote'
 import { storedServiceUnitRecords } from './settings'
+import { ensureServerSettings } from './serverSettings'
 
 type Category = { id: string; parentId: string | null; name: string; color: string | null; imageUrl: string | null; sortOrder: number; active: boolean; source: 'MARKETPLACE' | 'POS' }
 type Service = { id: string; name: string; description: string; imageUrl: string | null; units: string[]; active: boolean; source: 'MARKETPLACE' | 'POS' }
@@ -41,7 +42,9 @@ const categoryLabel = (categories: Map<string, Category>, id: string | null) => 
   return parent ? `${parent.name} › ${own.name}` : own.name
 }
 
-export async function loadCatalogue(get: (path: string) => Promise<any>, serviceUnitRecords = storedServiceUnitRecords('store')): Promise<LaundryCatalogue> {
+export async function loadCatalogue(get: (path: string) => Promise<any>, serviceUnitRecords?: ReturnType<typeof storedServiceUnitRecords>): Promise<LaundryCatalogue> {
+  await ensureServerSettings(get).catch(() => undefined)
+  serviceUnitRecords = serviceUnitRecords || storedServiceUnitRecords()
   const [pos, charges, discounts] = await Promise.all([
     get('/vendor/pos-catalogue') as Promise<PosCatalogue>,
     get('/vendor/adjustment-rules/charge').catch(() => []),
@@ -78,10 +81,7 @@ export async function loadCatalogue(get: (path: string) => Promise<any>, service
   }
 }
 
-route('GET', '/laundry/catalogue', async ({ get }) => {
-  const profile = await get('/vendor/profile').catch(() => ({}))
-  return loadCatalogue(get, storedServiceUnitRecords(profile.id || profile.branch_code || 'store'))
-})
+route('GET', '/laundry/catalogue', async ({ get }) => loadCatalogue(get))
 route('GET', '/laundry/settings/categories', async ({ get }) => {
   const catalogue = await get('/vendor/pos-catalogue') as PosCatalogue
   const garmentUse = new Map<string, number>()

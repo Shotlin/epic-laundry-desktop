@@ -4,7 +4,6 @@ import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useDialogFocus } from '@/components/laundry/useDialogFocus'
 import { apiGet, apiPatch, apiPost } from '@/lib/api'
-import { isWebOnly } from '@/lib/cloudAuth'
 
 type ServiceUnit = { id: string; value: string; fullName: string; shortName: string; active: boolean; builtIn: boolean; usageCount: number }
 type UnitInput = { fullName: string; shortName: string }
@@ -53,7 +52,6 @@ export default function LaundryServiceUnits() {
       <div><p className="text-[10px] font-extrabold uppercase tracking-[.16em] text-[#664cf0]">Catalog</p><h1 className="mt-1 font-serif text-3xl text-[#241a45]">Service Units</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-[#6f6982]">Name the way staff measure garments or services. The short name is used where space is tight.</p></div>
       <button type="button" onClick={() => { save.reset(); setNotice(''); setAdding(true) }} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-[#664cf0] px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-[#5740cb] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#664cf0] focus-visible:ring-offset-2"><Plus className="h-4 w-4" />Add Unit</button>
     </div>
-    {isWebOnly ? <p className="mt-4 rounded-xl border border-[#f0e1b4] bg-[#fffaf0] px-4 py-3 text-xs leading-5 text-[#74591d]">These unit definitions are saved in this browser for this branch. They do not sync to other devices yet.</p> : null}
     {notice ? <p role="status" className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{notice}</p> : null}
 
     <section aria-label="Service units" className="mt-6 overflow-hidden rounded-2xl border border-[#272043]/10 bg-white shadow-[0_8px_28px_rgba(32,23,60,.04)]">
