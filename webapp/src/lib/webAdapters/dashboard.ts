@@ -8,6 +8,7 @@
 // consults it when isWebOnly is true.
 import type { LaundryDashboard } from '../laundry'
 import { route, rupees, listOf, type Real } from './core'
+import { laundryOrder, queueMatches, type RealOrder as RealCounterOrder } from './orders'
 
 type Get = Real['get']
 
@@ -16,10 +17,17 @@ type RealOrder = { status: string; total_amount?: string | number; created_at?: 
 const CLOSED = new Set(['DELIVERED', 'CANCELLED', 'REJECTED', 'EXPIRED'])
 
 async function dashboard(get: Get): Promise<LaundryDashboard> {
-  const [pos, ordersPage] = await Promise.all([
+  const [pos, ordersPage, counterPage] = await Promise.all([
     get('/vendor/pos/dashboard'),
     get('/vendor-orders?page=1&limit=100').catch(() => [] as RealOrder[]),
+    get('/vendor/counter/orders?limit=500').catch(() => [] as RealCounterOrder[]),
   ])
+  // The headline cards link to the counter's Orders page, so they count the counter's own orders (the same queues that
+  // page applies). Orders that arrive from the LNDRY app are shown in the online sections below, never mixed in.
+  const counter = (listOf(counterPage) as RealCounterOrder[]).map(laundryOrder)
+  const today = new Date().toISOString().slice(0, 10)
+  const soon = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10)
+  const counterQueue = (queue: string) => counter.filter((order) => queueMatches(queue, order, today, soon)).length
   // The real endpoint returns the orders array directly as `data`
   // (pagination travels in the response meta), not `{orders: [...]}`.
   const orders: RealOrder[] = listOf(ordersPage, 'orders')
@@ -38,17 +46,17 @@ async function dashboard(get: Get): Promise<LaundryDashboard> {
     kpis: {
       collection: counterToday,
       orderRequests: awaiting,
-      pendingOrders: open.length,
-      booking: count('WAITING_VENDOR_CONFIRMATION', 'VENDOR_ACCEPTED', 'PICKUP_ASSIGNED'),
-      delivery: count('OUT_FOR_DELIVERY'),
-      delivered: count('DELIVERED'),
+      pendingOrders: counterQueue('pending'),
+      booking: counterQueue('booking'),
+      delivery: counterQueue('delivery'),
+      delivered: counterQueue('delivered'),
       todayRevenue: counterToday,
-      upcomingDeliveries: count('PACKED', 'DELIVERY_ASSIGNED'),
+      upcomingDeliveries: counterQueue('delivery-due'),
     },
     attention: [
       { id: 'requests', label: 'Order requests', count: awaiting, tone: 'slate' },
-      { id: 'pickup', label: 'Pickup in progress', count: count('PICKUP_ASSIGNED', 'GOING_FOR_PICKUP', 'PICKUP_OTP_VERIFIED'), tone: 'amber' },
-      { id: 'upcoming', label: 'Upcoming delivery', count: count('PACKED', 'DELIVERY_ASSIGNED'), tone: 'blue' },
+      { id: 'pickup', label: 'Pickup to assign', count: counterQueue('pickup-unassigned'), tone: 'amber' },
+      { id: 'upcoming', label: 'Upcoming delivery', count: counterQueue('delivery-due'), tone: 'blue' },
     ],
     trend: [],
     fulfillmentBreakdown: [],

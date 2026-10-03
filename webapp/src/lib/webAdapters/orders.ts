@@ -187,7 +187,7 @@ const STATUS_FILTER: Record<string, (order: LaundryOrder) => boolean> = {
 }
 const CLOSED_STATES = new Set(['Delivered', 'Cancelled'])
 const day = (value: unknown) => String(value || '').slice(0, 10)
-function queueMatches(queue: string, order: LaundryOrder, today: string, soon: string): boolean {
+export function queueMatches(queue: string, order: LaundryOrder, today: string, soon: string): boolean {
   switch (queue) {
     case 'pending': return !CLOSED_STATES.has(order.state)
     case 'booking': return order.state === 'Booked'
@@ -348,10 +348,10 @@ const addressLine = (a?: RealAddress) => (a ? [a.addressLine1, a.addressLine2, a
 const addressIn = (d: any) => ({ label: d.label, addressLine1: d.line1, addressLine2: d.line2, city: d.city, state: d.state, pincode: d.postalCode, isDefault: d.isDefault === true })
 
 route('PATCH', '/laundry/customers/:id', async ({ patch, get, params, body }) => {
-  const saved = await patch(`/vendor/customer-profiles/${params.id}`, { name: body.name, email: body.email, notes: body.notes })
+  const saved = await patch(`/vendor/customer-profiles/${params.id}`, { name: body.name, email: body.email, notes: body.notes, servicePreferences: body.servicePreferences, preferredContact: body.preferredContact, marketingConsent: body.marketingConsent })
   const addresses = (await get(`/vendor/customer-profiles/${params.id}/addresses`).catch(() => ({ addresses: [] }))).addresses as RealAddress[]
   const phone = onlyDigits(body.phone)
-  return { id: params.id, name: saved.profile.displayName || body.name || '', phone: phone || body.phone || '', email: saved.profile.email || '', address: addressLine(addresses[0]), notes: saved.profile.notes || '' }
+  return { id: params.id, name: saved.profile.displayName || body.name || '', phone: phone || body.phone || '', email: saved.profile.email || '', address: addressLine(addresses[0]), notes: saved.profile.notes || '', servicePreferences: saved.profile.servicePreferences || undefined, preferredContact: saved.profile.preferredContact || undefined, marketingConsent: saved.profile.marketingConsent ?? undefined }
 })
 route('POST', '/laundry/customers/:id/addresses', async ({ post, params, body }) => addressOut((await post(`/vendor/customer-profiles/${params.id}/addresses`, addressIn(body))).address))
 route('PATCH', '/laundry/customers/:id/addresses/:addressId', async ({ patch, params, body }) => addressOut((await patch(`/vendor/customer-profiles/${params.id}/addresses/${params.addressId}`, addressIn(body))).address))
@@ -374,7 +374,7 @@ route('GET', '/laundry/customers/:id', async ({ get, params }) => {
     return counts
   }, {})
   return {
-    customer: { id: profile.customer.id, name: profile.customer.name || '', phone: profile.customer.phone || '', email: profile.customer.email || '', address: addressLine(profile.addresses?.[0]), notes: profile.notes || '', preferredContact: undefined, servicePreferences: undefined, marketingConsent: undefined },
+    customer: { id: profile.customer.id, name: profile.customer.name || '', phone: profile.customer.phone || '', email: profile.customer.email || '', address: addressLine(profile.addresses?.[0]), notes: profile.notes || '', preferredContact: profile.preferredContact || undefined, servicePreferences: profile.servicePreferences || undefined, marketingConsent: profile.marketingConsent ?? undefined },
     metrics: {
       revenue: rupees(active.reduce((sum, order) => sum + order.totalPaise, 0)),
       orderBalance: rupees(active.reduce((sum, order) => sum + Math.max(0, order.totalPaise - order.amountPaidPaise), 0)),
