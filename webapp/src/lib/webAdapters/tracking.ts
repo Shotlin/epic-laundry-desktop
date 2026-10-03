@@ -201,7 +201,13 @@ route('GET', '/laundry/quality-claims', async ({ get }) => (listOf(await get('/v
 })))
 route('GET', '/laundry/quality-analytics', ({ get }) => get('/vendor/counter/quality-analytics'))
 route('POST', '/laundry/quality-claims', async ({ post, body }) => {
-  const result = await post('/vendor/quality-claims', { garmentUnitId: body.garmentUnitId, category: wire(body.category), severity: wire(body.severity || 'MEDIUM'), description: body.description })
+  // The page asks for a tag or unit code; the backend wants the unit's id, so look the tag up first (inspect only, no state change).
+  let garmentUnitId = String(body.garmentUnitId || '').trim()
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(garmentUnitId)) {
+    garmentUnitId = (await post('/vendor/garment-units/scan', { tagCode: garmentUnitId })).unit?.id
+    if (!garmentUnitId) throw new Error('That tag was not found in this branch. Check the code and try again.')
+  }
+  const result = await post('/vendor/quality-claims', { garmentUnitId, category: wire(body.category), severity: wire(body.severity || 'MEDIUM'), description: body.description })
   return result.claim ?? result
 })
 route('POST', '/laundry/quality-claims/:id/resolve', async ({ post, params, body }) => {
