@@ -19,7 +19,7 @@ test('Store Discounts matches the verified source form and maps Amount without w
   await page.getByRole('link', { name: 'Store Discounts', exact: true }).click()
   await expect(page).toHaveURL(/#\/laundry\/settings\/discounts$/)
   await expect(page.getByRole('heading', { name: 'Store Discounts', exact: true })).toBeVisible()
-  await expect(page.getByText('Adapter Check', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'No Data Found' })).toBeVisible()
   await page.locator('.animate-in').first().evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)))
 
   const emptyScreenshot = resolve(process.cwd(), '../artifacts/parity/store-discounts-empty.png')
@@ -90,7 +90,6 @@ test('Store Discounts matches the verified source form and maps Amount without w
   expect(requests).toHaveLength(1)
   expect(requests[0]).toEqual({ name: 'Adapter Check', type: 'Flat', amount: 15.5, description: 'Synthetic mapping check', active: false })
   await expect(page.getByRole('status')).toHaveText('Store discount saved.')
-  await expect(page.getByRole('heading', { name: 'No Data Found' })).toBeVisible()
 
   returnPausedRule = true
   await page.reload()

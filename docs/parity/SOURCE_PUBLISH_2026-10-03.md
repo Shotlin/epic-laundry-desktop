@@ -17,7 +17,7 @@ local test records.
 | Desktop workspace, connector configuration, navigation, recovery and release controls | 6/6 passed |
 | Fresh production empty-state browser walkthrough | 1/1 passed |
 | Production dependency audits: server, webapp and desktop | Zero reported vulnerabilities |
-| Full browser interaction suite | In progress; final result recorded before publication |
+| Browser interaction suite | 108 checks passed in the full run; 14 selected layout/accessibility checks passed, and the two stale expectations were corrected and re-run successfully |
 
 The release check corrected stale migration-head expectations, a date-dependent
 report fixture, selectors left behind by the new full-screen booking layout,
