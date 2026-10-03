@@ -1,7 +1,7 @@
 import type { EntityRow } from '../../kernel/types.js';
 import { parseMoney } from '../../kernel/money.js';
 import { store } from '../../kernel/store.js';
-import { calculateCanonicalTax } from './canonical-tax.js';
+import { calculateCanonicalTax, type TaxLineInput } from './canonical-tax.js';
 import { createCanonicalInvoiceSnapshot } from './invoice-snapshot.js';
 import { resolveTaxPolicyRule, supplierTaxProfile } from './tax-policy.js';
 
@@ -32,7 +32,7 @@ export function ensureCanonicalInvoiceForLegacy(tenant: string, actor: string, i
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(invoice.data.posting_date || '')) || Number.isNaN(issuedDate.getTime())) throw new Error('TAX_PROFILE_INCOMPLETE');
   const rawItems = Array.isArray(invoice.data.items) ? invoice.data.items as Array<Record<string, unknown>> : [];
   if (!rawItems.length) throw new Error('TAX_CLASSIFICATION_MISSING');
-  const lines = rawItems.map((item, index) => {
+  const mappedLines = rawItems.map((item, index) => {
     const linkedItem = item.item ? store.getRow(tenant, String(item.item)) : undefined;
     const classificationType = String(item.classificationType || linkedItem?.data?.classificationType || (invoice.entity === 'pos_invoice' ? 'HSN' : 'SAC')) as 'SAC' | 'HSN';
     const supplyType = String(item.supplyType || linkedItem?.data?.supplyType || (invoice.entity === 'pos_invoice' ? 'Product' : 'Service')) as 'Service' | 'Product';
@@ -48,20 +48,52 @@ export function ensureCanonicalInvoiceForLegacy(tenant: string, actor: string, i
       classificationCode: rule.classificationCode,
       quantityMilli: Math.round(quantity * 1000),
       unit: String(item.unit || linkedItem?.data?.uom || 'Piece').trim().slice(0, 24),
-      unitPricePaise: parseMoney(item.rate ?? linkedItem?.data?.rate, `invoice line ${index + 1} rate`),
+      // Only the legacy laundry adjustment represents a signed discount.
+      // A negative garment/product price must still fail validation.
+      unitPricePaise: parseMoney(item.rate ?? linkedItem?.data?.rate, `invoice line ${index + 1} rate`, { allowZero: true, allowNegative: invoice.entity === 'sales_invoice' && item.item === 'LAUNDRY-ADJUSTMENT' }),
       taxRateBps: rule.rateBps,
     } as const;
   });
+  const lines: TaxLineInput[] = mappedLines.filter((line) => line.unitPricePaise >= 0).map((line) => ({ ...line }));
+  for (const adjustment of mappedLines.filter((line) => line.unitPricePaise < 0)) {
+    const discount = Math.round(adjustment.quantityMilli * -adjustment.unitPricePaise / 1000);
+    const eligible = lines.filter((line) => line.classificationType === adjustment.classificationType && line.classificationCode === adjustment.classificationCode && line.taxRateBps === adjustment.taxRateBps);
+    const capacities = eligible.map((line) => Math.round(line.quantityMilli * line.unitPricePaise / 1000) - (line.discountPaise || 0));
+    const gross = capacities.reduce((sum, amount) => sum + amount, 0);
+    if (discount > gross || gross <= 0) throw new Error('invoice discount exceeds matching service value');
+    // Allocate in integer paise. Largest remainders preserve the exact discount
+    // without rounding a small weighed line below zero.
+    const shares = capacities.map((amount, index) => {
+      const product = BigInt(discount) * BigInt(amount);
+      return { index, amount: Number(product / BigInt(gross)), remainder: product % BigInt(gross) };
+    });
+    let remaining = discount - shares.reduce((sum, share) => sum + share.amount, 0);
+    for (const share of [...shares].sort((a, b) => a.remainder === b.remainder ? a.index - b.index : a.remainder > b.remainder ? -1 : 1)) {
+      if (remaining <= 0) break;
+      share.amount += 1;
+      remaining -= 1;
+    }
+    for (const share of shares) eligible[share.index].discountPaise = (eligible[share.index].discountPaise || 0) + share.amount;
+  }
   const placeOfSupplyStateCode = String(invoice.data.place_of_supply || supplier.stateCode).trim();
-  const tax = calculateCanonicalTax({ supplierStateCode: supplier.stateCode, placeOfSupplyStateCode, lines });
+  let tax = calculateCanonicalTax({ supplierStateCode: supplier.stateCode, placeOfSupplyStateCode, lines });
   const legacyTotalPaise = parseMoney(invoice.data.grand_total, 'legacy invoice total');
-  if (tax.totals.totalPaise !== legacyTotalPaise) throw new Error('TAX_RECONCILIATION_FAILED');
+  if (tax.totals.totalPaise !== legacyTotalPaise) {
+    const gst = invoice.data.__gst as { totalTaxable?: number } | undefined;
+    const roundingPaise = legacyTotalPaise - tax.totals.totalPaise;
+    // Moving a signed adjustment into line discounts changes per-line GST
+    // rounding by a few paise. Preserve the posted total only when taxable
+    // value matches exactly and the difference is within that rounding bound.
+    if (!mappedLines.some((line) => line.unitPricePaise < 0) || !gst || parseMoney(gst.totalTaxable, 'invoice taxable value', { allowZero: true }) !== tax.totals.taxablePaise || Math.abs(roundingPaise) > rawItems.length) throw new Error('TAX_RECONCILIATION_FAILED');
+    tax = calculateCanonicalTax({ supplierStateCode: supplier.stateCode, placeOfSupplyStateCode, lines, roundingPaise });
+  }
   const paidPaise = invoice.entity === 'pos_invoice' ? legacyTotalPaise : store.rowsOf(tenant, 'payment_entry')
     .filter((payment) => payment.status === 'Submitted' && payment.data.payment_type === 'Receive' && String(payment.data.against_sales || '') === invoice.id)
     .reduce((sum, payment) => sum + parseMoney(payment.data.amount, `payment ${payment.id}`), 0);
   const order = sourceOrderId || (invoice.entity === 'sales_invoice' ? store.rowsOf(tenant, 'laundry_order').find((candidate) => String(candidate.data.invoice || '') === invoice.id)?.id : undefined);
   const snapshot = createCanonicalInvoiceSnapshot(tenant, actor, {
     sourceOrderId: order || `${invoice.entity === 'pos_invoice' ? 'pos-invoice' : 'sales-invoice'}:${invoice.id}`,
+    sourceInvoiceId: invoice.id,
     issuedAt,
     supplier,
     customer: (() => {

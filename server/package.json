@@ -36,6 +36,7 @@
     "test:statutory": "tsx src/_selftest-statutory.ts",
     "test:tax-policy": "tsx src/_selftest-tax-policy.ts",
     "test:invoice-snapshot": "tsx src/_selftest-invoice-snapshot.ts",
+    "test:booking-discount": "tsx src/_selftest-booking-discount.ts",
     "test:provider-events": "tsx src/_selftest-provider-events.ts",
     "test:provider-events-api": "tsx src/_selftest-provider-events-api.ts",
     "test:marketplace-notifications": "tsx src/_selftest-marketplace-notifications.ts",

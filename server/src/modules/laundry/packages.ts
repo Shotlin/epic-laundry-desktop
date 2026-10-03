@@ -5,11 +5,12 @@ import type { EntityRow } from '../../kernel/types.js';
 import { appendCustomerLedger } from './customers.js';
 import { laundryBusinessDate } from './dates.js';
 import { parseMoney, moneyNumber } from '../../kernel/money.js';
+import { cashShiftForTransaction } from './cash.js';
 
 export type PackageLineInput = { garment: string; service: string; allowance: number };
 export type PackageInput = { name: string; description?: string; price: number | string; validityDays: number; active?: boolean; services: PackageLineInput[] };
-export type PackagePurchaseInput = { customer: string; servicePackage: string; purchaseDate?: string; pricePaid?: number | string; paymentMode?: 'Pay Later' | 'Cash' | 'UPI' | 'Card' | 'Bank'; reason?: string };
-export type PackagePaymentInput = { amount: number | string; mode: 'Cash' | 'UPI' | 'Card' | 'Bank'; reference?: string; paymentDate?: string; reason?: string };
+export type PackagePurchaseInput = { customer: string; servicePackage: string; purchaseDate?: string; pricePaid?: number | string; paymentMode?: 'Pay Later' | 'Cash' | 'UPI' | 'Card' | 'Bank'; cashRegister?: string; reason?: string };
+export type PackagePaymentInput = { amount: number | string; mode: 'Cash' | 'UPI' | 'Card' | 'Bank'; reference?: string; paymentDate?: string; cashRegister?: string; reason?: string };
 export type PackageRedemptionInput = { customerPackage: string; garment: string; service: string; quantity: number; order?: string; reason?: string };
 
 const round = (value: number) => Math.round((Number.isFinite(value) ? value : 0) * 100) / 100;
@@ -40,16 +41,35 @@ function packageContractAmount(tenant: string, row: EntityRow) {
 }
 function packageCollectedAmount(tenant: string, row: EntityRow) {
   let collectedPaise = 0;
-  const initial = store.financialDocumentAmountPaise(tenant, 'package-payment', row.entity, row.id);
+  const payments = packagePaymentRows(tenant, row.id);
+  const initial = store.financialDocumentAmountPaise(tenant, 'package-payment', row.entity, row.id)
+    ?? store.financialEntryAmountPaise(tenant, 'package-payment', row.entity, row.id);
   if (initial !== undefined) collectedPaise += initial;
-  else if (String(row.data.payment_status || '') === 'Paid' && String(row.data.payment_mode || '') !== 'Pay Later') collectedPaise += parseMoney(row.data.price_paid || 0, `package ${row.id} payment`, { allowZero: true });
-  for (const payment of packagePaymentRows(tenant, row.id)) {
+  else if (row.data.initial_payment_amount !== undefined) collectedPaise += parseMoney(row.data.initial_payment_amount || 0, `package ${row.id} initial payment`, { allowZero: true });
+  else if (!payments.length && String(row.data.payment_status || '') === 'Paid' && String(row.data.payment_mode || '') !== 'Pay Later') collectedPaise += parseMoney(row.data.price_paid || 0, `package ${row.id} payment`, { allowZero: true });
+  for (const payment of payments) {
     const amountPaise = store.financialDocumentAmountPaise(tenant, 'package-payment', payment.entity, payment.id);
     if (amountPaise !== undefined) collectedPaise += amountPaise;
     else collectedPaise += parseMoney(payment.data.amount || 0, `package payment ${payment.id}`, { allowZero: true });
   }
   return moneyNumber(collectedPaise);
 }
+
+/** All open package receivables for report tables. Unlike the dashboard
+ * liability summary, this list is not truncated so paging and exports share
+ * the full set of package balances. */
+export function listPackageBalanceRows(tenant: string) {
+  return activeRows(tenant, 'customer_package').flatMap((row) => {
+    const definition = store.getRow(tenant, String(row.data.service_package));
+    if (!definition || definition.entity !== 'service_package') return [];
+    const invoiceAmount = packageContractAmount(tenant, row);
+    const paidAmount = packageCollectedAmount(tenant, row);
+    const balanceAmount = round(Math.max(0, invoiceAmount - paidAmount));
+    if (balanceAmount <= 0) return [];
+    return [{ id: row.id, customerId: String(row.data.customer), packageName: String(definition.data.name || 'Package unavailable'), date: String(row.data.purchased_date || row.created_at.slice(0, 10)), invoiceAmount, paidAmount, balanceAmount }];
+  });
+}
+
 function presentDefinition(tenant: string, row: EntityRow) {
   return { id: row.id, name: String(row.data.name), description: String(row.data.description || ''), price: Number(row.data.price || 0), validityDays: Number(row.data.validity_days || 0), active: Boolean(row.data.active), services: packageLines(tenant, row.id).map((line) => ({ id: line.id, garment: String(line.data.garment), service: String(line.data.service), allowance: Number(line.data.allowance || 0) })) };
 }
@@ -108,7 +128,8 @@ export function purchaseServicePackage(tenant: string, actor: string, input: Pac
   if (!['Pay Later', 'Cash', 'UPI', 'Card', 'Bank'].includes(paymentMode)) throw new Error('unsupported package payment method');
   const reason = String(input.reason || 'Package purchase').trim().slice(0, 500);
   return store.transaction(() => {
-    const assigned = post(createRow(tenant, actor, 'customer_package', { customer: input.customer, service_package: definition.id, purchased_date: purchaseDate, expires_on: addDays(purchaseDate, Number(definition.data.validity_days)), contract_price: contractPrice, price_paid: pricePaid, payment_mode: paymentMode, payment_status: pricePaid >= contractPrice && contractPrice > 0 ? 'Paid' : pricePaid > 0 ? 'Part Paid' : 'Unpaid', status: 'Active' }));
+    const cashShift = paymentMode === 'Cash' && pricePaid > 0 ? cashShiftForTransaction(tenant, input.cashRegister) : undefined;
+    const assigned = post(createRow(tenant, actor, 'customer_package', { customer: input.customer, service_package: definition.id, purchased_date: purchaseDate, expires_on: addDays(purchaseDate, Number(definition.data.validity_days)), contract_price: contractPrice, price_paid: pricePaid, initial_payment_amount: pricePaid, initial_payment_mode: pricePaid > 0 ? paymentMode : 'Pay Later', payment_mode: paymentMode, cash_shift_id: cashShift?.id, cash_register: cashShift?.data.register, payment_status: pricePaid >= contractPrice && contractPrice > 0 ? 'Paid' : pricePaid > 0 ? 'Part Paid' : 'Unpaid', status: 'Active' }));
     if (contractPrice > 0) {
       appendCustomerLedger(tenant, actor, { customer: input.customer, entryType: 'Invoice Debit', debit: contractPrice, referenceType: 'customer_package', referenceId: assigned.id, reason });
       if (pricePaid > 0 && paymentMode !== 'Pay Later') {
@@ -137,7 +158,8 @@ export function collectServicePackagePayment(tenant: string, actor: string, cust
   const reason = String(input.reason || 'Package payment').trim().slice(0, 500);
   const reference = String(input.reference || '').trim().slice(0, 120);
   return store.transaction(() => {
-    const payment = post(createRow(tenant, actor, 'customer_package_payment', { customer_package: assigned.id, customer: assigned.data.customer, payment_date: paymentDate, amount, mode: input.mode, reference, reason }));
+    const cashShift = input.mode === 'Cash' ? cashShiftForTransaction(tenant, input.cashRegister) : undefined;
+    const payment = post(createRow(tenant, actor, 'customer_package_payment', { customer_package: assigned.id, customer: assigned.data.customer, payment_date: paymentDate, amount, mode: input.mode, reference, reason, cash_shift_id: cashShift?.id, cash_register: cashShift?.data.register }));
     store.appendFinancialEntry({ id: `money:${payment.id}:package-payment`, tenant, storeId: store.currentStore(tenant), kind: 'package-payment', sourceEntity: payment.entity, sourceId: payment.id, direction: 'IN', amountPaise: parseMoney(amount, 'package payment'), currency: 'INR', occurredAt: payment.created_at, actor, metadata: { paymentMode: input.mode, customerId: assigned.data.customer, customerPackageId: assigned.id, reference } });
     store.appendFinancialDocument({ id: `doc:${payment.id}:package-payment`, tenant, storeId: store.currentStore(tenant), documentType: 'package-payment', sourceEntity: payment.entity, sourceId: payment.id, amountPaise: parseMoney(amount, 'package payment'), currency: 'INR', status: payment.status, occurredAt: payment.created_at, actor, metadata: { paymentMode: input.mode, customerId: assigned.data.customer, customerPackageId: assigned.id, reference } });
     appendCustomerLedger(tenant, actor, { customer: String(assigned.data.customer), entryType: 'Payment Credit', credit: amount, referenceType: 'customer_package_payment', referenceId: payment.id, reason });

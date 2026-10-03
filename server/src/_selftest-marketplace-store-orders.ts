@@ -13,6 +13,8 @@ import { join } from 'node:path';
 
 const tempDir = mkdtempSync(join(tmpdir(), 'epic-marketplace-store-orders-'));
 process.env.EPIC_DATA_FILE = join(tempDir, 'epic.json');
+process.env.EPIC_DB_FILE = join(tempDir, 'epic.sqlite');
+process.env.EPIC_LEGACY_JSON_FILE = process.env.EPIC_DATA_FILE;
 process.env.EPIC_MARKETPLACE_CLOUD_API_URL = 'https://fake-lndry-cloud.test/api/v1';
 
 const LINKED_PHONE = '9000000701';

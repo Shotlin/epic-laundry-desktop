@@ -16,6 +16,7 @@ import { supplierStateCodeForTenant, supplierTaxProfile } from '../gst/tax-polic
 import { createLaundryCancellationCreditNote } from '../gst/cancellation-credit-note.js';
 import { financeExpenseCategory } from '../finance/classification.js';
 import { VISUAL_ASSETS } from './garment-assets.js';
+import { listPackageBalanceRows } from './packages.js';
 
 function canonicalTaxEvidenceConfigured(tenant: string) {
   // A supplier profile and approved rule are not enough to activate GST on a
@@ -74,7 +75,7 @@ export type LaundryState = typeof LAUNDRY_STATES[number];
 
 type BookInput = {
   customer: { id?: string; name?: string; phone?: string; email?: string; address?: string };
-  items: Array<{ garment: string; service: string; qty: number }>;
+  items: Array<{ garment: string; service: string; qty: number; color?: string; garmentType?: string; rateOverride?: number }>;
   orderDate?: string;
   expectedDeliveryDate: string;
   containerCount?: number;
@@ -111,6 +112,9 @@ type QuotedItem = {
   priceRule: string;
   amount: number;
   hsn: string;
+  color?: string;
+  garmentType?: string;
+  rateOverride?: number;
 };
 
 type Quote = {
@@ -122,6 +126,11 @@ type Quote = {
   taxRate: number;
   taxAmount: number;
   grandTotal: number;
+  breakdown: {
+    charges: Array<{ label: string; percent: number | null; amount: number }>;
+    discounts: Array<{ label: string; percent: number | null; amount: number }>;
+    tax: { label: string; percent: number | null; amount: number } | null;
+  };
 };
 
 type ExpenseInput = {
@@ -182,10 +191,16 @@ type CategoryInput = { name?: string; color?: string; image?: string; sortOrder?
 type ServiceInput = { name?: string; description?: string; units?: string[]; active?: boolean };
 type GarmentInput = { name?: string; code?: string; category?: string; unit?: string; hsn?: string; gstRate?: number; visualKey?: string; photo?: string; active?: boolean };
 type PriceInput = { garment?: string; service?: string; customer?: string; rate?: number; active?: boolean };
-type AdjustmentRuleInput = { name?: string; type?: 'Flat' | 'Percentage'; amount?: number; description?: string; active?: boolean };
+type AdjustmentRuleInput = { name?: string; type?: 'Flat' | 'Percentage'; amount?: number; expressCharge?: boolean; description?: string; active?: boolean };
 type TaxRuleInput = { name?: string; rate?: number; active?: boolean };
 
-const SERVICE_UNITS = ['Piece', 'Kilogram', 'Pair', 'Square Foot'] as const;
+const SERVICE_UNIT_DEFINITIONS = [
+  { value: 'Piece', fullName: 'Quantity', shortName: 'Qty' },
+  { value: 'Kilogram', fullName: 'Kilogram', shortName: 'Kg' },
+  { value: 'Square Foot', fullName: 'Sq.Ft', shortName: 'Sq.Ft' },
+  { value: 'Pair', fullName: 'Pair', shortName: 'Pair' },
+] as const;
+const SERVICE_UNITS = SERVICE_UNIT_DEFINITIONS.map((unit) => unit.value);
 const GARMENT_VISUAL_KEYS = ['foldedShirt', 'foldedTrouser', 'foldedSaree', 'foldedKurti', 'foldedBlanket', 'foldedBedsheet', 'mixedClothes', 'shoePair', 'foldedBlazer', 'foldedDress', 'foldedJeans', 'foldedHoodie', 'foldedKurta', 'sherwani', 'blouse', 'salwarSuit', 'lehenga', 'tieScarf', 'pillowCover', 'quiltDuvet', 'handbag', 'towel', 'curtain', 'carpetRug', 'softToy', 'socksPair'] as const;
 const CONTAINER_TRANSITIONS: Record<LaundryContainerState, LaundryContainerState[]> = {
   Intake: ['Processing', 'Cancelled'], Processing: ['Ready', 'Cancelled'], Ready: ['Dispatched', 'Delivered', 'Cancelled'], Dispatched: ['Delivered'],
@@ -308,6 +323,10 @@ export function quoteLaundryOrder(tenant: string, input: Pick<BookInput, 'items'
     const price = priceFor(tenant, garment.id, service.id, customer);
     const unit = String(garment.data.unit || 'Piece');
     if (['Piece', 'Pair'].includes(unit) && !Number.isInteger(qty)) throw new Error(`${unit} quantities must be whole numbers`);
+    const rateOverride = line.rateOverride === undefined || line.rateOverride === null ? undefined : Number(line.rateOverride);
+    if (rateOverride !== undefined && (!Number.isFinite(rateOverride) || rateOverride < 0 || rateOverride > 1_000_000)) throw new Error('garment price override must be between ₹0 and ₹10,00,000');
+    const color = String(line.color || '').trim().slice(0, 40);
+    const garmentType = String(line.garmentType || '').trim().slice(0, 60);
     return {
       garment: garment.id,
       garmentName: String(garment.data.name),
@@ -315,32 +334,61 @@ export function quoteLaundryOrder(tenant: string, input: Pick<BookInput, 'items'
       serviceName: String(service.data.name),
       unit,
       qty: round(qty),
-      rate: price.rate,
+      rate: rateOverride === undefined ? price.rate : round(rateOverride),
       priceRule: price.rule.id,
-      amount: round(qty * price.rate),
+      amount: round(qty * (rateOverride === undefined ? price.rate : round(rateOverride))),
       hsn: String(garment.data.hsn || '9997'),
+      ...(color ? { color } : {}),
+      ...(garmentType ? { garmentType } : {}),
+      ...(rateOverride === undefined ? {} : { rateOverride: round(rateOverride) }),
     };
   });
   const subtotal = round(items.reduce((sum, item) => sum + item.amount, 0));
-  const configuredCharges = selectedRules(tenant, 'laundry_charge_rule', input.chargeRuleIds).reduce((sum, rule) => round(sum + amountForRule(rule, subtotal)), 0);
-  const charges = Math.max(0, round(configuredCharges + optionalMoney(input.charges, 'charges')));
-  const configuredDiscounts = selectedRules(tenant, 'laundry_discount_rule', input.discountRuleIds).reduce((sum, rule) => round(sum + amountForRule(rule, subtotal + charges)), 0);
-  const discounts = Math.min(round(configuredDiscounts + optionalMoney(input.discounts, 'discounts')), subtotal + charges);
+  const chargeRuleLines = selectedRules(tenant, 'laundry_charge_rule', input.chargeRuleIds).map((rule) => ({
+    label: String(rule.data.name || 'Charge'),
+    percent: rule.data.type === 'Percentage' ? Number(rule.data.amount) : null,
+    amount: amountForRule(rule, subtotal),
+  }));
+  const configuredCharges = chargeRuleLines.reduce((sum, line) => round(sum + line.amount), 0);
+  const manualCharge = optionalMoney(input.charges, 'charges');
+  const charges = Math.max(0, round(configuredCharges + manualCharge));
+  const discountRuleLines = selectedRules(tenant, 'laundry_discount_rule', input.discountRuleIds).map((rule) => ({
+    label: String(rule.data.name || 'Discount'),
+    percent: rule.data.type === 'Percentage' ? Number(rule.data.amount) : null,
+    amount: amountForRule(rule, subtotal + charges),
+  }));
+  const configuredDiscounts = discountRuleLines.reduce((sum, line) => round(sum + line.amount), 0);
+  const manualDiscount = optionalMoney(input.discounts, 'discounts');
+  const discountBeforeCap = round(configuredDiscounts + manualDiscount);
+  const discounts = Math.min(discountBeforeCap, subtotal + charges);
+  let remainingDiscount = discounts;
+  const discountLines = [...discountRuleLines, ...(manualDiscount > 0 ? [{ label: 'Discount', percent: null, amount: manualDiscount }] : [])]
+    .map((line) => {
+      const amount = round(Math.min(line.amount, remainingDiscount));
+      remainingDiscount = round(remainingDiscount - amount);
+      return { ...line, amount };
+    })
+    .filter((line) => line.amount > 0);
   const taxable = round(subtotal + charges - discounts);
   const selectedTax = input.taxRuleId ? getRequired(tenant, 'laundry_tax_rule', String(input.taxRuleId), 'tax rule') : undefined;
   const taxRate = Math.max(0, Math.min(100, round(selectedTax ? Number(selectedTax.data.rate) : Number(input.taxRate) || 0)));
   const taxAmount = round(taxable * taxRate / 100);
-  return { items, subtotal, charges, discounts, taxable, taxRate, taxAmount, grandTotal: round(taxable + taxAmount) };
+  const breakdown = {
+    charges: [...chargeRuleLines.filter((line) => line.amount > 0), ...(manualCharge > 0 ? [{ label: 'Additional Charge', percent: null, amount: manualCharge }] : [])],
+    discounts: discountLines,
+    tax: taxAmount > 0 ? { label: 'GST', percent: taxRate || null, amount: taxAmount } : null,
+  };
+  return { items, subtotal, charges, discounts, taxable, taxRate, taxAmount, grandTotal: round(taxable + taxAmount), breakdown };
 }
 
 function invoiceItems(quote: Quote) {
   const rows = quote.items.map((item) => ({
-    item: item.garment, qty: item.qty, rate: item.rate, gst_rate: quote.taxRate, hsn: item.hsn,
-    description: `${item.garmentName} · ${item.serviceName}`,
+    item: item.garment, qty: item.qty, rate: item.rate, gst_rate: quote.taxRate, hsn: item.hsn, unit: item.unit,
+    description: [item.garmentName, item.garmentType, item.color, item.serviceName].filter(Boolean).join(' · '),
   }));
   const adjustment = round(quote.charges - quote.discounts);
   if (adjustment !== 0) {
-    rows.push({ item: 'LAUNDRY-ADJUSTMENT', qty: 1, rate: adjustment, gst_rate: quote.taxRate, hsn: '9997', description: 'Laundry order adjustment' });
+    rows.push({ item: 'LAUNDRY-ADJUSTMENT', qty: 1, rate: adjustment, gst_rate: quote.taxRate, hsn: '9997', unit: 'Piece', description: 'Laundry order adjustment' });
   }
   return rows;
 }
@@ -366,7 +414,7 @@ function createPhysicalUnits(tenant: string, actor: string, orderId: string, cus
       store.createGarmentUnit(unit);
       const tag: TagHistoryRecord = { id: `th_${randomUUID()}`, tenant, storeId: unit.storeId, garmentUnitId: id, tagCode, status: 'Active', issuedAt: now, issuedBy: actor, version: 1, createdAt: now };
       store.createTagHistory(tag);
-      store.appendGarmentUnitEvent({ id: `gue_${randomUUID()}`, tenant, storeId: unit.storeId, unitId: id, event: 'created', toState: 'Intake', location: 'Intake', actor, note: 'Created at order intake', metadata: { orderId, itemIndex, lineSequence, orderSequence, orderTotal, tagCode }, createdAt: now });
+      store.appendGarmentUnitEvent({ id: `gue_${randomUUID()}`, tenant, storeId: unit.storeId, unitId: id, event: 'created', toState: 'Intake', location: 'Intake', actor, note: 'Created at order intake', metadata: { orderId, itemIndex, lineSequence, orderSequence, orderTotal, tagCode, color: item.color || '', garmentType: item.garmentType || '' }, createdAt: now });
       createProductionTask(tenant, actor, id, orderId, 'Intake');
       createdUnits.push(unit);
     }
@@ -387,10 +435,13 @@ function createLaundryContainers(tenant: string, actor: string, orderId: string,
     const now = new Date().toISOString();
     const id = `lc_${randomUUID()}`;
     const tagCode = `ELB-${today().replace(/-/g, '')}-${String(store.nextSeq('laundry-container-tag')).padStart(6, '0')}`;
-    const container: LaundryContainerRecord = { id, tenant, storeId: store.currentStore(tenant), orderId, customerId, sequence, total: count, weightKg: totalWeight, tagCode, state: 'Intake', location: 'Intake', condition: 'Normal', createdBy: actor, createdAt: now, updatedAt: now };
+    // The booked kilogram quantity belongs to the order. Until staff record
+    // measured bag weights, do not repeat the same order total as each bag's
+    // individual weight.
+    const container: LaundryContainerRecord = { id, tenant, storeId: store.currentStore(tenant), orderId, customerId, sequence, total: count, weightKg: count === 1 ? totalWeight : undefined, tagCode, state: 'Intake', location: 'Intake', condition: 'Normal', createdBy: actor, createdAt: now, updatedAt: now };
     store.createLaundryContainer(container);
     store.appendLaundryContainerEvent({ id: `lce_${randomUUID()}`, tenant, storeId: container.storeId, containerId: id, event: 'created', toState: 'Intake', location: 'Intake', actor, note: 'Created from explicit bag/container count at order intake', createdAt: now });
-    audit(tenant, actor, 'laundry:container-created', { entity: 'laundry_container', row_id: id, after: { orderId, tagCode, sequence, total: count, weightKg: totalWeight } });
+    audit(tenant, actor, 'laundry:container-created', { entity: 'laundry_container', row_id: id, after: { orderId, tagCode, sequence, total: count, weightKg: container.weightKg, orderWeightKg: totalWeight } });
     created.push(container);
   }
   return created;
@@ -552,6 +603,8 @@ export function bookLaundryOrder(tenant: string, actor: string, input: BookInput
     store.appendFinancialDocument({ id: `doc:${paymentEntry.id}`, tenant, storeId: store.currentStore(tenant), documentType: 'payment', sourceEntity: 'payment_entry', sourceId: paymentEntry.id, amountPaise: parseMoney(remainderAfterWallet, 'payment amount'), currency: 'INR', status: paymentEntry.status, occurredAt: paymentEntry.created_at, actor, metadata: { mode: paymentMode, invoiceId: submittedInvoice.id } });
     store.appendFinancialEntry({ id: `money:${paymentEntry.id}:collection`, tenant, storeId: store.currentStore(tenant), kind: 'collection', sourceEntity: 'payment_entry', sourceId: paymentEntry.id, direction: 'IN', amountPaise: parseMoney(remainderAfterWallet, 'payment amount'), currency: 'INR', occurredAt: paymentEntry.created_at, actor, metadata: { mode: paymentMode, invoiceId: submittedInvoice.id } });
   }
+  const bookedPaymentAmount = round((walletPaymentEntry ? walletAmountRupees : 0) + (paymentEntry ? remainderAfterWallet : 0));
+  const bookedPaymentStatus = bookedPaymentAmount >= quote.grandTotal && quote.grandTotal > 0 ? 'Paid' : bookedPaymentAmount > 0 ? 'Part Paid' : 'Unpaid';
   const order = createRow(tenant, actor, 'laundry_order', {
     customer: customer.id,
     order_date: orderDate,
@@ -564,9 +617,10 @@ export function bookLaundryOrder(tenant: string, actor: string, input: BookInput
     discounts: quote.discounts,
     tax_rate: quote.taxRate,
     tax_amount: quote.taxAmount,
+    price_breakdown: quote.breakdown,
     grand_total: quote.grandTotal,
     payment_mode: paymentMode,
-    payment_status: (paymentEntry || (walletPaymentEntry && remainderAfterWallet <= 0)) ? 'Paid' : 'Unpaid',
+    payment_status: bookedPaymentStatus,
     invoice: submittedInvoice.id,
     payment_entry: paymentEntry?.id,
     wallet_payment_entry: walletPaymentEntry?.id,
@@ -742,6 +796,7 @@ export function editLaundryOrder(tenant: string, actor: string, id: string, inpu
     order.data.discounts = quote.discounts;
     order.data.tax_rate = quote.taxRate;
     order.data.tax_amount = quote.taxAmount;
+    order.data.price_breakdown = quote.breakdown;
     order.data.grand_total = quote.grandTotal;
     order.data.payment_status = 'Unpaid';
     order.data.invoice = submittedReplacement.id;
@@ -831,10 +886,12 @@ function presentGarmentUnit(tenant: string, unit: GarmentUnitRecord) {
 function presentLaundryContainer(tenant: string, container: LaundryContainerRecord) {
   const order = store.getRow(tenant, container.orderId);
   const customer = store.getRow(tenant, container.customerId);
+  const orderItems = Array.isArray(order?.data.items) ? order.data.items as Array<Record<string, unknown>> : [];
+  const orderWeightKg = round(orderItems.filter((item) => String(item.unit || '') === 'Kilogram').reduce((sum, item) => sum + Number(item.qty || 0), 0));
   return {
     id: container.id, tagCode: container.tagCode, tagPayload: `ELB:v1:${container.tagCode}`, orderId: container.orderId,
     orderNumber: order?.data.name || container.orderId, customer: { id: container.customerId, name: customer?.data.name || 'Unknown customer', phone: customer?.data.phone || '' },
-    sequence: container.sequence, total: container.total, weightKg: container.weightKg, state: container.state, location: container.location,
+    sequence: container.sequence, total: container.total, weightKg: container.total === 1 ? container.weightKg : undefined, orderWeightKg: orderWeightKg > 0 ? orderWeightKg : undefined, state: container.state, location: container.location,
     condition: container.condition, expectedDeliveryDate: order?.data.expected_delivery_date, createdAt: container.createdAt, updatedAt: container.updatedAt, deliveredAt: container.deliveredAt,
   };
 }
@@ -1052,11 +1109,17 @@ export function presentOrder(tenant: string, order: EntityRow) {
     taxRate: Number(order.data.tax_rate || 0),
     taxAmount: Number(order.data.tax_amount || 0),
     grandTotal: normalizedGrandTotalPaise === undefined ? Number(order.data.grand_total || 0) : moneyNumber(normalizedGrandTotalPaise),
+    breakdown: order.data.price_breakdown || {
+      charges: Number(order.data.charges || 0) > 0 ? [{ label: 'Additional Charge', percent: null, amount: Number(order.data.charges || 0) }] : [],
+      discounts: Number(order.data.discounts || 0) > 0 ? [{ label: 'Discount', percent: null, amount: Number(order.data.discounts || 0) }] : [],
+      tax: Number(order.data.tax_amount || 0) > 0 ? { label: 'GST', percent: Number(order.data.tax_rate || 0) || null, amount: Number(order.data.tax_amount || 0) } : null,
+    },
     paymentMode: order.data.payment_mode,
     paymentStatus: order.data.payment_status,
     walletAmountPaise: Number(order.data.wallet_amount_paise || 0),
     walletRedemptionRequestId: order.data.wallet_redemption_request_id || undefined,
     source: order.data.source,
+    reportedBy: order.created_by,
     pickupRider: pickupRider ? { id: pickupRider.id, name: pickupRider.data.name, phone: pickupRider.data.phone || '' } : undefined,
     deliveryRider: deliveryRider ? { id: deliveryRider.id, name: deliveryRider.data.name, phone: deliveryRider.data.phone || '' } : undefined,
     pickupSlot: order.data.pickup_slot || '',
@@ -1071,21 +1134,97 @@ export function presentOrder(tenant: string, order: EntityRow) {
   };
 }
 
-export function listLaundryOrders(tenant: string, query: { search?: string; state?: string; from?: string; to?: string } = {}) {
+type LaundryQueue = 'pending' | 'booking' | 'delivery' | 'delivered' | 'pickup-unassigned' | 'delivery-due' | 'delivery-unassigned' | 'express';
+
+function queueMatches(order: ReturnType<typeof presentOrder>, queue?: string) {
+  const normalized = queue as LaundryQueue | undefined;
+  if (!normalized) return true;
+  if (normalized === 'pending') return !['Delivered', 'Cancelled'].includes(order.state);
+  if (normalized === 'booking') return order.state === 'Booked';
+  if (normalized === 'delivery') return order.state === 'Out for Delivery';
+  if (normalized === 'delivered') return order.state === 'Delivered';
+  if (normalized === 'pickup-unassigned') return order.fulfillmentMode === 'Pickup Order' && order.state === 'Booked' && !order.pickupRider;
+  if (normalized === 'delivery-due') return !['Delivered', 'Cancelled'].includes(order.state) && order.expectedDeliveryDate <= today();
+  if (normalized === 'delivery-unassigned') return order.fulfillmentMode !== 'Pickup Order' && ['Ready', 'Out for Delivery'].includes(order.state) && !order.deliveryRider;
+  if (normalized === 'express') return order.fulfillmentMode === 'Express Delivery' && !['Delivered', 'Cancelled'].includes(order.state);
+  return true;
+}
+
+const ORDER_STATUS_STATES: Record<string, LaundryState> = {
+  booked: 'Booked',
+  'in-process': 'In Process',
+  done: 'Ready',
+  'pickup-received': 'Picked Up',
+  'out-for-delivery': 'Out for Delivery',
+  delivered: 'Delivered',
+  cancelled: 'Cancelled',
+};
+
+function orderStatusMatches(order: ReturnType<typeof presentOrder>, status?: string) {
+  if (!status) return true;
+  const statuses = [...new Set(String(status).split(',').map((value) => value.trim()).filter(Boolean))];
+  const supported = new Set([...Object.keys(ORDER_STATUS_STATES), 'pickup-assigned', 'partially-delivered']);
+  if (!statuses.length || statuses.length > supported.size || statuses.some((value) => !supported.has(value))) return false;
+  return statuses.some((value) => orderMatchesOneStatus(order, value));
+}
+
+function orderMatchesOneStatus(order: ReturnType<typeof presentOrder>, status: string) {
+  if (status === 'pickup-assigned') {
+    return order.state === 'Booked' && order.fulfillmentMode === 'Pickup Order' && Boolean(order.pickupRider);
+  }
+  if (status === 'partially-delivered') {
+    const ordered = order.items.reduce((sum, item) => sum + (Number(item.fulfilment?.ordered) || Number(item.qty) || 0), 0);
+    const delivered = order.items.reduce((sum, item) => sum + (Number(item.fulfilment?.delivered) || 0), 0);
+    return delivered > 0 && delivered < ordered;
+  }
+  const state = ORDER_STATUS_STATES[status];
+  return state !== undefined && order.state === state;
+}
+
+export function listLaundryOrders(tenant: string, query: { search?: string; phone?: string; orderNo?: string; customer?: string; state?: string; status?: string; source?: string; reportedBy?: string; from?: string; to?: string; queue?: string } = {}) {
   const needle = String(query.search || '').trim().toLowerCase();
+  const phone = String(query.phone || '').trim().toLowerCase().replace(/[\s()+-]/g, '');
+  const orderNo = String(query.orderNo || '').trim().toLowerCase();
+  const customer = String(query.customer || '').trim().toLowerCase();
   return store.rowsOf(tenant, 'laundry_order')
     .filter((order) => !query.state || order.data.state === query.state)
+    .filter((order) => !query.source || order.data.source === query.source)
+    .filter((order) => !query.reportedBy || order.created_by === query.reportedBy)
     .filter((order) => !query.from || order.data.order_date >= query.from)
     .filter((order) => !query.to || order.data.order_date <= query.to)
     .map((order) => presentOrder(tenant, order))
+    .filter((order) => orderStatusMatches(order, query.status))
+    .filter((order) => queueMatches(order, query.queue))
+    .filter((order) => !phone || order.customer.phone.toLowerCase().replace(/[\s()+-]/g, '').includes(phone))
+    .filter((order) => !orderNo || order.orderNumber.toLowerCase().includes(orderNo))
+    .filter((order) => !customer || order.customer.name.toLowerCase().includes(customer))
     .filter((order) => !needle || [order.orderNumber, order.invoiceNumber, order.customer.name, order.customer.phone].join(' ').toLowerCase().includes(needle))
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 }
 
-export function listLaundryOrderPage(tenant: string, query: { search?: string; state?: string; from?: string; to?: string; page?: number; pageSize?: number; cursor?: string } = {}) {
-  const result = store.listLaundryOrderPage(tenant, query);
-  const items = result.rows.map((order) => presentOrder(tenant, order));
-  return { items, total: result.total, page: result.page, pageSize: result.pageSize, totalPages: Math.max(1, Math.ceil(result.total / result.pageSize)), nextCursor: result.nextCursor, hasMore: result.hasMore };
+export function listLaundryOrderPage(tenant: string, query: { search?: string; phone?: string; orderNo?: string; customer?: string; state?: string; status?: string; source?: string; reportedBy?: string; from?: string; to?: string; queue?: string; page?: number; pageSize?: number; cursor?: string } = {}) {
+  if (!query.queue) {
+    const statusValues = query.status ? [...new Set(String(query.status).split(',').map((value) => value.trim()).filter(Boolean))] : [];
+    const statusState = statusValues.length === 1 ? ORDER_STATUS_STATES[statusValues[0]] : undefined;
+    const stateConflict = Boolean(statusState && query.state && query.state !== statusState);
+    const result = store.listLaundryOrderPage(tenant, {
+      ...query,
+      state: statusState ? (stateConflict ? '__no_matching_state__' : statusState) : query.state,
+      status: statusState ? undefined : query.status,
+    });
+    const items = result.rows.map((order) => presentOrder(tenant, order));
+    return { items, total: result.total, page: result.page, pageSize: result.pageSize, totalPages: Math.max(1, Math.ceil(result.total / result.pageSize)), nextCursor: result.nextCursor, hasMore: result.hasMore };
+  }
+  const pageSize = Math.max(1, Math.min(100, Number(query.pageSize) || 50));
+  const page = Math.max(1, Number(query.page) || 1);
+  const all = listLaundryOrders(tenant, query);
+  const totalPages = Math.max(1, Math.ceil(all.length / pageSize));
+  const items = all.slice((page - 1) * pageSize, page * pageSize);
+  return { items, total: all.length, page: Math.min(page, totalPages), pageSize, totalPages, nextCursor: undefined, hasMore: page < totalPages };
+}
+
+export function listLaundryOrderFilterOptions(tenant: string) {
+  return store.listLaundryOrderFilterOptions(tenant);
 }
 
 export function getLaundryOrder(tenant: string, id: string) {
@@ -1117,7 +1256,143 @@ export function laundryCatalogue(tenant: string) {
   const chargeRules = activeRows(tenant, 'laundry_charge_rule').map((row) => ({ id: row.id, ...row.data }));
   const discountRules = activeRows(tenant, 'laundry_discount_rule').map((row) => ({ id: row.id, ...row.data }));
   const taxRules = activeRows(tenant, 'laundry_tax_rule').map((row) => ({ id: row.id, ...row.data }));
-  return { categories, services, garments, prices, chargeRules, discountRules, taxRules, serviceUnits: [...SERVICE_UNITS] };
+  const serviceUnitRecords = listLaundryServiceUnits(tenant);
+  return {
+    categories, services, garments, prices, chargeRules, discountRules, taxRules,
+    serviceUnits: serviceUnitRecords.filter((unit) => unit.active).map((unit) => unit.value),
+    serviceUnitRecords,
+  };
+}
+
+/** Settings list intentionally includes switched-off categories so owners can restore them. */
+export function listLaundryCategories(tenant: string): Array<Record<string, any> & { id: string; usageCount: number }> {
+  const usage = new Map<string, number>();
+  for (const row of store.rowsOf(tenant, 'laundry_garment')) {
+    if (row.data.active === false) continue;
+    const categoryId = String(row.data.category || '');
+    if (categoryId) usage.set(categoryId, (usage.get(categoryId) || 0) + 1);
+  }
+  const rows: Array<Record<string, any> & { id: string; usageCount: number }> = store.rowsOf(tenant, 'laundry_category')
+    .map((row) => ({ id: row.id, ...(row.data as Record<string, any>), usageCount: usage.get(row.id) || 0 }));
+  return rows.sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || String(a.name || '').localeCompare(String(b.name || '')));
+}
+
+/** Settings list includes switched-off services and reports active price-rule use. */
+export function listLaundryServices(tenant: string): Array<Record<string, any> & { id: string; usageCount: number }> {
+  const usage = new Map<string, number>();
+  for (const row of store.rowsOf(tenant, 'laundry_price')) {
+    if (row.data.active === false) continue;
+    const serviceId = String(row.data.service || '');
+    if (serviceId) usage.set(serviceId, (usage.get(serviceId) || 0) + 1);
+  }
+  const rows: Array<Record<string, any> & { id: string; usageCount: number }> = store.rowsOf(tenant, 'laundry_service')
+    .map((row) => ({ id: row.id, ...(row.data as Record<string, any>), usageCount: usage.get(row.id) || 0 }));
+  return rows.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+}
+
+export type LaundryServiceUnit = {
+  id: string;
+  value: string;
+  fullName: string;
+  shortName: string;
+  active: boolean;
+  builtIn: boolean;
+  usageCount: number;
+};
+
+function serviceUnitUsage(tenant: string, value: string) {
+  const garments = store.rowsOf(tenant, 'laundry_garment').filter((row) => row.data.unit === value && row.data.active !== false).length;
+  const services = store.rowsOf(tenant, 'laundry_service').filter((row) => Array.isArray(row.data.units) && (row.data.units as unknown[]).includes(value) && row.data.active !== false).length;
+  return garments + services;
+}
+
+export function listLaundryServiceUnits(tenant: string): LaundryServiceUnit[] {
+  const rows = store.rowsOf(tenant, 'laundry_service_unit').filter((row) => row.status !== 'Cancelled');
+  const standard = SERVICE_UNIT_DEFINITIONS.map((definition) => {
+    const override = rows.find((row) => row.data.builtInValue === definition.value);
+    return {
+      id: `builtin:${definition.value}`,
+      value: definition.value,
+      fullName: String(override?.data.fullName || definition.fullName),
+      shortName: String(override?.data.shortName || definition.shortName),
+      active: true,
+      builtIn: true,
+      usageCount: serviceUnitUsage(tenant, definition.value),
+    };
+  });
+  const custom = rows.filter((row) => !row.data.builtInValue).map((row) => ({
+    id: row.id,
+    value: String(row.data.value || row.data.fullName || ''),
+    fullName: String(row.data.fullName || ''),
+    shortName: String(row.data.shortName || ''),
+    active: row.data.active !== false,
+    builtIn: false,
+    usageCount: serviceUnitUsage(tenant, String(row.data.value || row.data.fullName || '')),
+  }));
+  return [...standard, ...custom];
+}
+
+export function saveLaundryServiceUnit(tenant: string, actor: string, input: { fullName?: unknown; shortName?: unknown }, id?: string) {
+  const fullName = String(input.fullName || '').trim().replace(/\\s+/g, ' ');
+  const shortName = String(input.shortName || '').trim().replace(/\\s+/g, ' ');
+  if (!fullName || fullName.length > 100) throw new Error('Full Unit Name is required and must be 100 characters or fewer');
+  if (!shortName || shortName.length > 10) throw new Error('Short Unit Name is required and must be 10 characters or fewer');
+  const units = listLaundryServiceUnits(tenant);
+  const current = id ? units.find((unit) => unit.id === id) : undefined;
+  if (id && !current) throw new Error('service unit not found');
+  if (units.some((unit) => unit.id !== id && unit.fullName.toLocaleLowerCase('en') === fullName.toLocaleLowerCase('en'))) throw new Error('a service unit with this name already exists');
+
+  return store.transaction(() => {
+    if (!id) {
+      const row = createRow(tenant, actor, 'laundry_service_unit', { value: fullName, fullName, shortName, active: true });
+      audit(tenant, actor, 'laundry:service-unit-created', { entity: row.entity, row_id: row.id, after: row.data });
+      return { id: row.id, value: fullName, fullName, shortName, active: true, builtIn: false, usageCount: 0 } satisfies LaundryServiceUnit;
+    }
+    if (current!.builtIn) {
+      const override = store.rowsOf(tenant, 'laundry_service_unit').find((row) => row.data.builtInValue === current!.value);
+      const data = { builtInValue: current!.value, value: current!.value, fullName, shortName, active: true };
+      const row = override
+        ? updateMaster(tenant, actor, 'laundry_service_unit', override.id, data, 'laundry:service-unit-updated')
+        : createRow(tenant, actor, 'laundry_service_unit', data);
+      if (!override) audit(tenant, actor, 'laundry:service-unit-updated', { entity: row.entity, row_id: row.id, after: row.data });
+      return { ...current!, fullName, shortName } satisfies LaundryServiceUnit;
+    }
+    const row = store.getRow(tenant, id);
+    if (!row || row.entity !== 'laundry_service_unit' || row.data.builtInValue) throw new Error('service unit not found');
+    const oldValue = String(row.data.value || row.data.fullName || '');
+    if (oldValue !== fullName) {
+      for (const garment of store.rowsOf(tenant, 'laundry_garment')) {
+        if (garment.data.unit === oldValue) updateMaster(tenant, actor, 'laundry_garment', garment.id, { unit: fullName }, 'laundry:service-unit-renamed');
+      }
+      for (const service of store.rowsOf(tenant, 'laundry_service')) {
+        if (!Array.isArray(service.data.units) || !(service.data.units as unknown[]).includes(oldValue)) continue;
+        updateMaster(tenant, actor, 'laundry_service', service.id, { units: [...new Set((service.data.units as unknown[]).map((unit) => unit === oldValue ? fullName : String(unit)))] }, 'laundry:service-unit-renamed');
+      }
+    }
+    const updated = updateMaster(tenant, actor, 'laundry_service_unit', id, { value: fullName, fullName, shortName }, 'laundry:service-unit-updated');
+    return { id: updated.id, value: fullName, fullName, shortName, active: updated.data.active !== false, builtIn: false, usageCount: serviceUnitUsage(tenant, fullName) } satisfies LaundryServiceUnit;
+  });
+}
+
+export function setLaundryServiceUnitActive(tenant: string, actor: string, id: string, active: boolean) {
+  const unit = listLaundryServiceUnits(tenant).find((candidate) => candidate.id === id);
+  if (!unit) throw new Error('service unit not found');
+  if (unit.builtIn) throw new Error('standard service units cannot be archived');
+  const row = store.getRow(tenant, id);
+  if (!row || row.entity !== 'laundry_service_unit') throw new Error('service unit not found');
+  if (!active && unit.usageCount > 0) throw new Error('remove this unit from active garments and services before archiving it');
+  return store.transaction(() => {
+    const updated = updateMaster(tenant, actor, 'laundry_service_unit', id, { active }, active ? 'laundry:service-unit-restored' : 'laundry:service-unit-archived');
+    return { ...unit, active: updated.data.active !== false };
+  });
+}
+
+export function listLaundryDiscountRules(tenant: string): Array<Record<string, unknown> & { id: string }> {
+  return store.rowsOf(tenant, 'laundry_discount_rule').map((row) => ({ id: row.id, ...(row.data as Record<string, unknown>) }));
+}
+
+export function listLaundryChargeRules(tenant: string): Array<Record<string, unknown> & { id: string }> {
+  return store.rowsOf(tenant, 'laundry_charge_rule').map((row) => ({ id: row.id, ...(row.data as Record<string, unknown>) }));
 }
 
 function cleanName(value: unknown, label: string) {
@@ -1148,9 +1423,15 @@ function cleanVisualKey(value: unknown) {
   if (!GARMENT_VISUAL_KEYS.includes(visualKey as typeof GARMENT_VISUAL_KEYS[number])) throw new Error('garment visual key is not in the approved visual taxonomy');
   return visualKey;
 }
-function uniqueNamed(tenant: string, entity: string, name: string, exceptId?: string) {
-  const duplicate = store.rowsOf(tenant, entity).find((row) => row.id !== exceptId && String(row.data.name || '').trim().toLowerCase() === name.toLowerCase());
-  if (duplicate) throw new Error(`a ${entity.replace('laundry_', '').replace(/_/g, ' ')} with this name already exists`);
+function uniqueNamed(tenant: string, entity: string, name: string, exceptId?: string, ignoreCategoryWhitespace = false) {
+  const key = (value: string) => ignoreCategoryWhitespace
+    ? value.normalize('NFKC').replace(/\s+/g, '').toLocaleLowerCase()
+    : value.trim().toLocaleLowerCase();
+  const duplicate = store.rowsOf(tenant, entity).find((row) => row.id !== exceptId && key(String(row.data.name || '')) === key(name));
+  if (duplicate) {
+    const detail = ignoreCategoryWhitespace ? ' with the same name ignoring case and spaces' : ' with this name';
+    throw new Error(`a ${entity.replace('laundry_', '').replace(/_/g, ' ')}${detail} already exists`);
+  }
 }
 function updateMaster(tenant: string, actor: string, entity: string, id: string, data: Record<string, unknown>, action: string) {
   const row = store.getRow(tenant, id);
@@ -1167,7 +1448,11 @@ export function saveLaundryCategory(tenant: string, actor: string, input: Catego
   const name = cleanName(input.name, 'category name');
   const data = { name, color: cleanColor(input.color), image: cleanImagePath(input.image), sort_order: Math.max(0, Math.trunc(Number(input.sortOrder) || 0)), active: cleanActive(input.active) };
   return store.transaction(() => {
-    uniqueNamed(tenant, 'laundry_category', name, id);
+    if (id && data.active === false && store.getRow(tenant, id)?.data.active !== false) {
+      const activeGarments = store.rowsOf(tenant, 'laundry_garment').filter((row) => row.data.category === id && row.data.active !== false).length;
+      if (activeGarments > 0) throw new Error('move active garments to another category before switching this category off');
+    }
+    uniqueNamed(tenant, 'laundry_category', name, id, true);
     const row = id ? updateMaster(tenant, actor, 'laundry_category', id, data, 'laundry:category-updated') : createRow(tenant, actor, 'laundry_category', data);
     if (!id) audit(tenant, actor, 'laundry:category-created', { entity: row.entity, row_id: row.id, after: row.data });
     return { id: row.id, ...row.data };
@@ -1177,9 +1462,14 @@ export function saveLaundryCategory(tenant: string, actor: string, input: Catego
 export function saveLaundryService(tenant: string, actor: string, input: ServiceInput, id?: string) {
   const name = cleanName(input.name, 'service name');
   const units = Array.isArray(input.units) ? [...new Set(input.units.map(String))] : undefined;
-  if (units && (!units.length || units.some((unit) => !SERVICE_UNITS.includes(unit as typeof SERVICE_UNITS[number])))) throw new Error('service units must use the supported unit list');
-  const data = { name, description: String(input.description || '').trim().slice(0, 500), units: units || [...SERVICE_UNITS], active: cleanActive(input.active) };
+  const supportedUnits = listLaundryServiceUnits(tenant).filter((unit) => unit.active).map((unit) => unit.value);
+  if (units && (!units.length || units.some((unit) => !supportedUnits.includes(unit)))) throw new Error('service units must use the active service unit list');
+  const data = { name, description: String(input.description || '').trim().slice(0, 500), units: units || supportedUnits, active: cleanActive(input.active) };
   return store.transaction(() => {
+    if (id && data.active === false && store.getRow(tenant, id)?.data.active !== false) {
+      const activePrices = store.rowsOf(tenant, 'laundry_price').filter((row) => row.data.service === id && row.data.active !== false).length;
+      if (activePrices > 0) throw new Error('disable or move active price rules before switching this service off');
+    }
     uniqueNamed(tenant, 'laundry_service', name, id);
     const row = id ? updateMaster(tenant, actor, 'laundry_service', id, data, 'laundry:service-updated') : createRow(tenant, actor, 'laundry_service', data);
     if (!id) audit(tenant, actor, 'laundry:service-created', { entity: row.entity, row_id: row.id, after: row.data });
@@ -1192,7 +1482,7 @@ export function saveLaundryGarment(tenant: string, actor: string, input: Garment
   const name = cleanName(input.name, 'garment name');
   const category = getRequired(tenant, 'laundry_category', String(input.category || ''), 'category');
   const unit = String(input.unit || 'Piece');
-  if (!SERVICE_UNITS.includes(unit as typeof SERVICE_UNITS[number])) throw new Error('garment unit must use the supported unit list');
+  if (!listLaundryServiceUnits(tenant).some((serviceUnit) => serviceUnit.active && serviceUnit.value === unit)) throw new Error('garment unit must use the active service unit list');
   const code = String(input.code || name.toUpperCase().replace(/[^A-Z0-9]+/g, '-')).trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 48);
   if (code.length < 2) throw new Error('garment code is required');
   const gstRate = round(Number(input.gstRate) || 0);
@@ -1234,13 +1524,47 @@ export function saveLaundryPrice(tenant: string, actor: string, input: PriceInpu
   });
 }
 
+/** Create a counter garment and its first general service price as one reversible catalogue action. */
+export function createLaundryGarmentWithPrice(tenant: string, actor: string, input: { garment?: GarmentInput; service?: string; rate?: number }) {
+  const garmentInput = input.garment || {};
+  return store.transaction(() => {
+    const category = getRequired(tenant, 'laundry_category', String(garmentInput.category || ''), 'category');
+    if (category.data.active === false) throw new Error('choose an active garment category');
+    const name = cleanName(garmentInput.name, 'garment name');
+    const unit = String(garmentInput.unit || 'Piece');
+    const duplicate = store.rowsOf(tenant, 'laundry_garment').find((row) => String(row.data.name || '').trim().toLocaleLowerCase() === name.toLocaleLowerCase());
+    const code = String(garmentInput.code || duplicate?.data.code || name.toUpperCase().replace(/[^A-Z0-9]+/g, '-')).trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 48);
+    if (duplicate && (duplicate.data.active === false || duplicate.data.category !== category.id || duplicate.data.unit !== unit || String(duplicate.data.code || '').toUpperCase() !== code)) {
+      throw new Error(`“${name}” already exists with different or inactive catalogue details. Open Catalogue to review it.`);
+    }
+    const visualKey = String(garmentInput.visualKey || inferredGarmentVisualKey(String(garmentInput.name || ''), String(category.data.name || '')));
+    const garment = duplicate
+      ? { id: duplicate.id, ...duplicate.data }
+      : saveLaundryGarment(tenant, actor, { ...garmentInput, name, code, unit, visualKey, active: true });
+    const requestedRate = Number(input.rate);
+    if (!Number.isFinite(requestedRate) || requestedRate <= 0 || requestedRate > 1_000_000) throw new Error('price must be greater than 0 and no more than 1,000,000');
+    const serviceId = String(input.service || '');
+    const service = getRequired(tenant, 'laundry_service', serviceId, 'service');
+    if (service.data.active === false) throw new Error('choose an active service');
+    const previousPrice = store.rowsOf(tenant, 'laundry_price').find((row) => row.data.garment === garment.id && row.data.service === serviceId && !row.data.customer);
+    if (previousPrice) {
+      if (previousPrice.data.active === false) throw new Error(`“${name}” already has a disabled price for this service. Review it in Catalogue.`);
+      if (Number(previousPrice.data.rate) !== requestedRate) throw new Error(`“${name}” already has a different price for this service. Review it in Catalogue.`);
+      return { garment, price: { id: previousPrice.id, ...previousPrice.data }, resumed: true };
+    }
+    const price = saveLaundryPrice(tenant, actor, { garment: garment.id, service: serviceId, rate: requestedRate, active: true });
+    return { garment, price };
+  });
+}
+
 function saveAdjustmentRule(tenant: string, actor: string, entity: 'laundry_charge_rule' | 'laundry_discount_rule', input: AdjustmentRuleInput, id?: string) {
   const name = cleanName(input.name, 'rule name');
+  if (name.length > 50) throw new Error('rule name must contain 2–50 characters');
   const type = input.type === 'Percentage' ? 'Percentage' : input.type === 'Flat' ? 'Flat' : undefined;
   if (!type) throw new Error('rule type must be Flat or Percentage');
   const amount = type === 'Flat' ? moneyNumber(parseMoney(input.amount, 'rule amount', { allowZero: true })) : round(Number(input.amount));
   if (!Number.isFinite(amount) || amount < 0 || (type === 'Percentage' && amount > 100)) throw new Error('rule amount is invalid');
-  const data = { name, type, amount, description: String(input.description || '').trim().slice(0, 500), active: cleanActive(input.active) };
+  const data = { name, type, amount, ...(entity === 'laundry_charge_rule' ? { expressCharge: input.expressCharge === true } : {}), description: String(input.description || '').trim().slice(0, 500), active: cleanActive(input.active) };
   return store.transaction(() => {
     uniqueNamed(tenant, entity, name, id);
     const row = id ? updateMaster(tenant, actor, entity, id, data, `laundry:${entity}-updated`) : createRow(tenant, actor, entity, data);
@@ -1392,6 +1716,98 @@ export function listLaundryImportJobs(tenant: string, importType?: string) {
     .sort((a, b) => `${b.completedAt}:${b.createdAt}`.localeCompare(`${a.completedAt}:${a.createdAt}`));
 }
 
+function customerImportValues(input: ImportCustomerInput) {
+  const name = String(input.name || '').trim();
+  const phone = normPhone(input.phone);
+  if (!name) throw new Error('customer name is required');
+  if (phone.length < 6) throw new Error('a valid phone is required');
+  return {
+    name,
+    phone,
+    email: String(input.email || '').trim(),
+    address: String(input.address || '').trim(),
+  };
+}
+
+function priceImportValues(input: ImportPriceInput) {
+  const garmentName = String(input.garmentName || '').trim();
+  const categoryName = String(input.categoryName || 'Imported').trim() || 'Imported';
+  const serviceName = String(input.serviceName || '').trim();
+  if (input.rate === undefined || input.rate === null || String(input.rate).trim() === '') throw new Error('rate is required');
+  const rate = moneyNumber(parseMoney(input.rate, 'rate', { allowZero: true }));
+  if (!garmentName) throw new Error('garment name is required');
+  if (!serviceName) throw new Error('service name is required');
+  if (!Number.isFinite(rate) || rate < 0) throw new Error('rate must be zero or greater');
+  const requestedUnit = String(input.unit || 'Piece').trim();
+  const unitAliases: Record<string, string> = { Quantity: 'Piece', 'Sq.Ft': 'Square Foot' };
+  const allowedUnits = new Set(['Piece', 'Kilogram', 'Pair', 'Square Foot']);
+  const unit = unitAliases[requestedUnit] || requestedUnit;
+  if (!allowedUnits.has(unit)) throw new Error('unit must be Piece, Quantity, Kilogram, Pair, Square Foot or Sq.Ft');
+  return {
+    garmentName,
+    categoryName,
+    serviceName,
+    rate,
+    unit,
+    hsn: String(input.hsn || '9997').trim() || '9997',
+    gstRate: Math.max(0, round(Number(input.gstRate) || 0)),
+    customerPhone: normPhone(input.customerPhone),
+    visualKey: String(input.visualKey || '').trim(),
+    photo: input.photo,
+  };
+}
+
+export function previewLaundryImport(tenant: string, importType: 'customers' | 'prices', input: unknown) {
+  if (!Array.isArray(input)) throw new Error(importType + ' import must be a list of rows');
+  if (input.length === 0) throw new Error(importType + ' import has no rows');
+  if (input.length > 2_000) throw new Error(importType + ' import is limited to 2,000 rows at a time');
+
+  const errors: ImportIssue[] = [];
+  if (importType === 'customers') {
+    (input as ImportCustomerInput[]).forEach((row, index) => {
+      try {
+        customerImportValues(row);
+      } catch (error: any) {
+        errors.push({ row: index + 2, message: error.message || 'Invalid row' });
+      }
+    });
+  } else {
+    const categories = store.rowsOf(tenant, 'laundry_category');
+    const garments = store.rowsOf(tenant, 'laundry_garment');
+    const customers = store.rowsOf(tenant, 'party').filter((row) => row.data.is_customer);
+    const virtualCategories = new Set<string>();
+    const virtualGarments = new Set<string>();
+
+    (input as ImportPriceInput[]).forEach((row, index) => {
+      try {
+        const values = priceImportValues(row);
+        if (values.customerPhone && !customers.some((customer) => normPhone(customer.data.phone) === values.customerPhone)) {
+          throw new Error('customer phone does not match an imported customer');
+        }
+
+        const category = categories.find((entry) => String(entry.data.name || '').trim().toLowerCase() === values.categoryName.toLowerCase());
+        const categoryKey = category?.id || values.categoryName.toLowerCase();
+        const garmentKey = categoryKey + '|' + values.garmentName.toLowerCase();
+        const existingGarment = Boolean(category && garments.some((entry) =>
+          String(entry.data.name || '').trim().toLowerCase() === values.garmentName.toLowerCase() && entry.data.category === category.id,
+        ));
+        if (!existingGarment && !virtualGarments.has(garmentKey)) {
+          if (!values.visualKey) throw new Error('Create this garment in Garments first, or add an approved Visual Key before importing its price');
+          cleanVisualKey(values.visualKey);
+          cleanImagePath(values.photo);
+          virtualGarments.add(garmentKey);
+          if (!category) virtualCategories.add(values.categoryName.toLowerCase());
+        } else if (!category && !virtualCategories.has(values.categoryName.toLowerCase())) {
+          virtualCategories.add(values.categoryName.toLowerCase());
+        }
+      } catch (error: any) {
+        errors.push({ row: index + 2, message: error.message || 'Invalid row' });
+      }
+    });
+  }
+  return { totalRows: input.length, readyRows: input.length - errors.length, errors };
+}
+
 export function importLaundryCustomers(tenant: string, actor: string, rows: ImportCustomerInput[]) {
   if (!Array.isArray(rows)) throw new Error('customer import must be a list of rows');
   if (rows.length === 0) throw new Error('customer import has no rows');
@@ -1399,18 +1815,15 @@ export function importLaundryCustomers(tenant: string, actor: string, rows: Impo
   const result = importResult();
   rows.forEach((input, index) => {
     try {
-      const name = String(input.name || '').trim();
-      const phone = normPhone(input.phone);
-      if (!name) throw new Error('customer name is required');
-      if (phone.length < 6) throw new Error('a valid phone is required');
+      const { name, phone, email, address } = customerImportValues(input);
       const existing = store.rowsOf(tenant, 'party').find((row) => normPhone(row.data.phone) === phone);
       if (existing) {
-        existing.data = { ...existing.data, name, phone, email: String(input.email || '').trim() || existing.data.email, address: String(input.address || '').trim() || existing.data.address, is_customer: true };
+        existing.data = { ...existing.data, name, phone, email: email || existing.data.email, address: address || existing.data.address, is_customer: true };
         existing.updated_at = new Date().toISOString();
         store.updateRow(existing);
         result.updated += 1;
       } else {
-        createRow(tenant, actor, 'party', { name, phone, email: String(input.email || '').trim(), address: String(input.address || '').trim(), is_customer: true });
+        createRow(tenant, actor, 'party', { name, phone, email, address, is_customer: true });
         result.created += 1;
       }
     } catch (error: any) { result.skipped += 1; result.errors.push({ row: index + 2, message: error.message || 'Invalid row' }); }
@@ -1429,47 +1842,42 @@ export function importLaundryPrices(tenant: string, actor: string, rows: ImportP
   if (!Array.isArray(rows)) throw new Error('price import must be a list of rows');
   if (rows.length === 0) throw new Error('price import has no rows');
   if (rows.length > 2_000) throw new Error('price import is limited to 2,000 rows at a time');
-  const allowedUnits = new Set(['Piece', 'Kilogram', 'Pair', 'Square Foot']);
   const result = importResult();
   rows.forEach((input, index) => {
     try {
-      const garmentName = String(input.garmentName || '').trim();
-      const categoryName = String(input.categoryName || 'Imported').trim() || 'Imported';
-      const serviceName = String(input.serviceName || '').trim();
-      if (input.rate === undefined || input.rate === null || String(input.rate).trim() === '') throw new Error('rate is required');
-      const rate = moneyNumber(parseMoney(input.rate, 'rate', { allowZero: true }));
-      if (!garmentName) throw new Error('garment name is required');
-      if (!serviceName) throw new Error('service name is required');
-      if (!Number.isFinite(rate) || rate < 0) throw new Error('rate must be zero or greater');
-      const requestedUnit = String(input.unit || 'Piece').trim();
-      const unit = allowedUnits.has(requestedUnit) ? requestedUnit : 'Piece';
-      const category = findNamedRow(tenant, 'laundry_category', categoryName) || createRow(tenant, actor, 'laundry_category', { name: categoryName, active: true });
-      const service = findNamedRow(tenant, 'laundry_service', serviceName) || createRow(tenant, actor, 'laundry_service', { name: serviceName, active: true });
+      const values = priceImportValues(input);
+      const existingCategory = findNamedRow(tenant, 'laundry_category', values.categoryName);
       // A reference catalogue can legitimately reuse a display name across
       // categories (for example CAP or TOWEL). Keep those rows distinct by
       // category instead of silently attaching every price to the first match.
-      let garment = store.rowsOf(tenant, 'laundry_garment').find((row) =>
-        String(row.data.name || '').trim().toLowerCase() === garmentName.toLowerCase() && row.data.category === category.id,
-      );
+      let garment = existingCategory ? store.rowsOf(tenant, 'laundry_garment').find((row) =>
+        String(row.data.name || '').trim().toLowerCase() === values.garmentName.toLowerCase() && row.data.category === existingCategory.id,
+      ) : undefined;
+      const customer = values.customerPhone ? store.rowsOf(tenant, 'party').find((row) => normPhone(row.data.phone) === values.customerPhone && row.data.is_customer) : undefined;
+      if (values.customerPhone && !customer) throw new Error('customer phone does not match an imported customer');
+      let visualKey = '';
+      let photo = '';
       if (!garment) {
-        const visualKey = cleanVisualKey(input.visualKey);
+        visualKey = cleanVisualKey(values.visualKey);
         if (!visualKey) throw new Error('new imported garments require an approved visual key before activation');
+        photo = cleanImagePath(values.photo);
+      }
+      const category = existingCategory || createRow(tenant, actor, 'laundry_category', { name: values.categoryName, active: true });
+      const service = findNamedRow(tenant, 'laundry_service', values.serviceName) || createRow(tenant, actor, 'laundry_service', { name: values.serviceName, active: true });
+      if (!garment) {
         garment = createRow(tenant, actor, 'laundry_garment', {
-          name: garmentName, code: garmentName.toUpperCase().replace(/[^A-Z0-9]+/g, '-'), category: category.id, unit,
-          hsn: String(input.hsn || '9997').trim() || '9997', gst_rate: Math.max(0, round(Number(input.gstRate) || 0)), visual_key: visualKey, photo: cleanImagePath(input.photo), active: true,
+          name: values.garmentName, code: values.garmentName.toUpperCase().replace(/[^A-Z0-9]+/g, '-'), category: category.id, unit: values.unit,
+          hsn: values.hsn, gst_rate: values.gstRate, visual_key: visualKey, photo, active: true,
         });
       }
-      const customerPhone = normPhone(input.customerPhone);
-      const customer = customerPhone ? store.rowsOf(tenant, 'party').find((row) => normPhone(row.data.phone) === customerPhone && row.data.is_customer) : undefined;
-      if (customerPhone && !customer) throw new Error('customer phone does not match an imported customer');
       const existingPrice = store.rowsOf(tenant, 'laundry_price').find((row) => row.data.garment === garment!.id && row.data.service === service.id && row.data.customer === customer?.id);
       if (existingPrice) {
-        existingPrice.data = { ...existingPrice.data, rate, active: true };
+        existingPrice.data = { ...existingPrice.data, rate: values.rate, active: true };
         existingPrice.updated_at = new Date().toISOString();
         store.updateRow(existingPrice);
         result.updated += 1;
       } else {
-        createRow(tenant, actor, 'laundry_price', { garment: garment.id, service: service.id, customer: customer?.id, rate, active: true });
+        createRow(tenant, actor, 'laundry_price', { garment: garment.id, service: service.id, customer: customer?.id, rate: values.rate, active: true });
         result.created += 1;
       }
     } catch (error: any) { result.skipped += 1; result.errors.push({ row: index + 2, message: error.message || 'Invalid row' }); }
@@ -1696,7 +2104,7 @@ export function createLaundryExpense(tenant: string, actor: string, input: Expen
 export function presentExpense(expense: EntityRow, tenant?: string) {
   const normalizedAmountPaise = tenant ? store.financialDocumentAmountPaise(tenant, 'expense', expense.entity, expense.id) : undefined;
   return {
-    id: expense.id, reference: expense.data.name || expense.id, expenseName: expense.data.expense_name, financeCategory: String(expense.data.finance_category || 'UNCLASSIFIED'),
+    id: expense.id, reference: expense.data.name || expense.id, expenseName: expense.data.expense_name, financeCategory: String(expense.data.finance_category || 'UNCLASSIFIED'), cashRegister: expense.data.cash_register || '',
     expenseDate: expense.data.expense_date, amount: normalizedAmountPaise === undefined ? Number(expense.data.amount || 0) : moneyNumber(normalizedAmountPaise),
     paymentReceiver: expense.data.payment_receiver || '', invoiceNumber: expense.data.invoice_number || '',
     isTaxPaid: Boolean(expense.data.is_tax_paid), paymentMode: expense.data.payment_mode || 'Cash',
@@ -1786,17 +2194,101 @@ export function laundryReports(tenant: string, from?: string, to?: string) {
 
 export type LaundryReportKind = 'invoice' | 'collection' | 'order' | 'consolidated-invoices' | 'customer' | 'customer-package' | 'customer-list' | 'growth' | 'discount' | 'expense' | 'balance' | 'pickup' | 'rider-delivery' | 'rider-collection' | 'warehouse-user-work';
 
+/** Warehouse User Work is an activation-gated report in the audited reference. */
+export function isLaundryReportLocked(kind: string): boolean {
+  return kind === 'warehouse-user-work';
+}
+
+function laundryReportDayTitle(date: string) {
+  return new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00.000Z`));
+}
+
 function normalizedFinancialAmount(tenant: string, documentType: string, source: EntityRow, fallback: unknown) {
   const amountPaise = store.financialDocumentAmountPaise(tenant, documentType, source.entity, source.id);
   return amountPaise === undefined ? Number(fallback || 0) : moneyNumber(amountPaise);
 }
 
-export function laundryStatistics(tenant: string, period: 'today' | 'week' | 'lifetime' = 'today') {
-  const to = today();
+type LaundryBalanceRow = { customer: string; phone: string; customerKey: string; invoiceNumber: string; orderNumber: string; invoiceAmount: number; balanceAmount: number; date: string };
+
+function laundryBalanceRows(tenant: string): LaundryBalanceRow[] {
+  const orders = store.rowsOf(tenant, 'laundry_order').map((row) => presentOrder(tenant, row));
+  const paymentsByInvoice = new Map<string, number>();
+  for (const payment of store.rowsOf(tenant, 'payment_entry')) {
+    if (payment.status !== 'Submitted' || payment.data.payment_type !== 'Receive') continue;
+    const invoiceId = String(payment.data.against_sales || '');
+    if (!invoiceId) continue;
+    paymentsByInvoice.set(invoiceId, round((paymentsByInvoice.get(invoiceId) || 0) + normalizedFinancialAmount(tenant, 'payment', payment, payment.data.amount)));
+  }
+
+  const balances: LaundryBalanceRow[] = [];
+  for (const order of orders) {
+    if (order.state === 'Cancelled') continue;
+    const raw = store.getRow(tenant, order.id);
+    const invoiceId = String(raw?.data.invoice || '');
+    const invoice = invoiceId ? store.getRow(tenant, invoiceId) : undefined;
+    const invoiceAmount = invoice?.entity === 'sales_invoice' ? normalizedFinancialAmount(tenant, 'invoice', invoice, order.grandTotal) : order.grandTotal;
+    const paidAmount = order.paymentStatus === 'Paid' ? invoiceAmount : Math.min(invoiceAmount, paymentsByInvoice.get(invoiceId) || 0);
+    const balanceAmount = round(Math.max(0, invoiceAmount - paidAmount));
+    if (balanceAmount <= 0) continue;
+    balances.push({ customer: order.customer.name, phone: order.customer.phone, customerKey: order.customer.id || order.customer.phone || order.customer.name, invoiceNumber: String(order.invoiceNumber || ''), orderNumber: order.orderNumber, invoiceAmount, balanceAmount, date: order.orderDate });
+  }
+
+  for (const item of listPackageBalanceRows(tenant)) {
+    const customer = store.getRow(tenant, item.customerId);
+    const name = String(customer?.data.name || 'Unknown customer');
+    const phone = String(customer?.data.phone || '');
+    balances.push({ customer: name, phone, customerKey: item.customerId || phone || name, invoiceNumber: 'Package Payment', orderNumber: '-', invoiceAmount: item.invoiceAmount, balanceAmount: item.balanceAmount, date: item.date });
+  }
+  return balances;
+}
+
+export type LaundryStatisticsPeriod = 'today' | 'yesterday' | 'week' | 'month' | 'quarter' | 'year' | 'custom' | 'lifetime';
+export type LaundryStatisticsRange = { period?: LaundryStatisticsPeriod; from?: string; to?: string };
+export type LaundryStatisticsFilters = Partial<Record<'ordersReview' | 'collection' | 'customerFrequency' | 'newCustomer', LaundryStatisticsRange>>;
+
+function statisticsDates(from: string, to: string) {
+  const dates: string[] = [];
+  let cursor = from;
+  for (let i = 0; i < 3661 && cursor <= to; i += 1) { dates.push(cursor); cursor = shiftDate(cursor, 1); }
+  return dates;
+}
+
+function validStatisticsDate(value: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+}
+
+export function laundryStatistics(tenant: string, input: LaundryStatisticsFilters | 'today' | 'week' | 'lifetime' = 'today') {
+  const asOf = today();
   const allOrderRows = store.rowsOf(tenant, 'laundry_order');
   const orderDates = allOrderRows.map((row) => String(row.data.order_date || '')).filter(Boolean).sort();
-  const from = period === 'week' ? shiftDate(to, -6) : period === 'lifetime' ? (orderDates[0] || to) : to;
-  const orders = allOrderRows.filter((row) => String(row.data.order_date || '') >= from && String(row.data.order_date || '') <= to && row.data.state !== 'Cancelled');
+  const legacy = typeof input === 'string' ? input : undefined;
+  const filterSet = typeof input === 'string' ? {} : input;
+  const defaults: Record<'ordersReview' | 'collection' | 'customerFrequency' | 'newCustomer', LaundryStatisticsPeriod> = {
+    ordersReview: legacy || 'today', collection: legacy || 'week', customerFrequency: legacy || 'today', newCustomer: legacy || 'week',
+  };
+  const resolve = (key: keyof typeof defaults): { period: LaundryStatisticsPeriod; from: string; to: string } => {
+    const requested = filterSet[key];
+    const period = requested?.period || defaults[key];
+    let from = asOf;
+    let to = asOf;
+    if (period === 'custom') {
+      from = String(requested?.from || ''); to = String(requested?.to || '');
+      if (!validStatisticsDate(from) || !validStatisticsDate(to) || from > to) throw new Error('Choose a valid custom start and end date.');
+    } else if (period === 'yesterday') from = to = shiftDate(asOf, -1);
+    else if (period === 'week') from = shiftDate(asOf, -6);
+    else if (period === 'month') from = `${asOf.slice(0, 7)}-01`;
+    else if (period === 'quarter') from = `${asOf.slice(0, 4)}-${String(Math.floor((Number(asOf.slice(5, 7)) - 1) / 3) * 3 + 1).padStart(2, '0')}-01`;
+    else if (period === 'year') from = `${asOf.slice(0, 4)}-01-01`;
+    else if (period === 'lifetime') from = orderDates[0] || asOf;
+    else if (period !== 'today') throw new Error('Unknown statistics period.');
+    return { period, from, to };
+  };
+  const ranges = {
+    ordersReview: resolve('ordersReview'), collection: resolve('collection'),
+    customerFrequency: resolve('customerFrequency'), newCustomer: resolve('newCustomer'),
+  };
+  const inRange = (value: unknown, range: { from: string; to: string }) => String(value || '') >= range.from && String(value || '') <= range.to;
+  const orders = allOrderRows.filter((row) => inRange(row.data.order_date, ranges.ordersReview) && row.data.state !== 'Cancelled');
   // The overview intentionally keeps the four UniClean-style buckets while
   // aggregating Epic's more granular lifecycle states into those buckets.
   const orderStates = [
@@ -1805,21 +2297,29 @@ export function laundryStatistics(tenant: string, period: 'today' | 'week' | 'li
     { state: 'Delivered', matches: ['Delivered'] },
     { state: 'Done', matches: ['Ready', 'Out for Delivery'] },
   ].map(({ state, matches }) => ({ state, count: orders.filter((row) => matches.includes(String(row.data.state))).length }));
-  const dates = dateList(from, to);
-  const payments = store.rowsOf(tenant, 'payment_entry').filter((row) => row.status === 'Submitted' && row.data.payment_type === 'Receive' && dates.includes(String(row.data.posting_date || '')));
-  const collectionDaily = dates.map((date) => ({ date, amount: round(payments.filter((row) => row.data.posting_date === date).reduce((sum, row) => sum + normalizedFinancialAmount(tenant, 'payment', row, row.data.amount), 0)) }));
+  const orderRangeDates = ranges.ordersReview.period === 'lifetime' ? [...new Set(orders.map((row) => String(row.data.order_date || '')))].sort() : statisticsDates(ranges.ordersReview.from, ranges.ordersReview.to);
+  const collectionRangeDates = ranges.collection.period === 'lifetime'
+    ? [...new Set(store.rowsOf(tenant, 'payment_entry').map((row) => String(row.data.posting_date || '')).filter((date) => date >= ranges.collection.from && date <= ranges.collection.to))].sort()
+    : statisticsDates(ranges.collection.from, ranges.collection.to);
+  const payments = store.rowsOf(tenant, 'payment_entry').filter((row) => row.status === 'Submitted' && row.data.payment_type === 'Receive' && inRange(row.data.posting_date, ranges.collection));
+  const collectionDaily = collectionRangeDates.map((date) => ({ date, amount: round(payments.filter((row) => row.data.posting_date === date).reduce((sum, row) => sum + normalizedFinancialAmount(tenant, 'payment', row, row.data.amount), 0)) }));
   const orderAmount = (row: EntityRow) => {
     const invoice = store.getRow(tenant, row.data.invoice);
     return invoice?.entity === 'sales_invoice' ? normalizedFinancialAmount(tenant, 'invoice', invoice, row.data.grand_total) : Number(row.data.grand_total || 0);
   };
-  const orderDaily = dates.map((date) => {
+  const orderDaily = orderRangeDates.map((date) => {
     const dayOrders = orders.filter((row) => String(row.data.order_date || '') === date);
     return { date, orders: dayOrders.length, amount: round(dayOrders.reduce((sum, row) => sum + orderAmount(row), 0)) };
   });
-  const customerIds = orders.map((row) => String(row.data.customer || '')).filter(Boolean);
-  const frequency = [...new Set(customerIds)].map((customer) => ({ customer, visits: customerIds.filter((id) => id === customer).length })).sort((a, b) => b.visits - a.visits);
-  const newCustomers = store.rowsOf(tenant, 'party').filter((row) => row.data.is_customer && dates.includes(row.created_at.slice(0, 10)));
-  const newCustomerDaily = dates.map((date) => ({ date, count: newCustomers.filter((row) => row.created_at.slice(0, 10) === date).length }));
+  const frequencyOrders = allOrderRows.filter((row) => inRange(row.data.order_date, ranges.customerFrequency) && row.data.state !== 'Cancelled');
+  const customerIds = frequencyOrders.map((row) => String(row.data.customer || '')).filter(Boolean);
+  const frequency = [...new Set(customerIds)].map((customerId) => {
+    const customer = store.getRow(tenant, customerId);
+    return { customer: String(customer?.data.name || customer?.data.display_name || customerId), visits: customerIds.filter((id) => id === customerId).length };
+  }).sort((a, b) => b.visits - a.visits);
+  const newCustomers = store.rowsOf(tenant, 'party').filter((row) => row.data.is_customer && inRange(row.created_at.slice(0, 10), ranges.newCustomer));
+  const newCustomerDates = ranges.newCustomer.period === 'lifetime' ? [...new Set(newCustomers.map((row) => row.created_at.slice(0, 10)))].sort() : statisticsDates(ranges.newCustomer.from, ranges.newCustomer.to);
+  const newCustomerDaily = newCustomerDates.map((date) => ({ date, count: newCustomers.filter((row) => row.created_at.slice(0, 10) === date).length }));
   const serviceMap = orders.flatMap((row) => (Array.isArray(row.data.items) ? row.data.items : []) as Array<Record<string, unknown>>).reduce((rows, item) => {
     const name = String(item.serviceName || 'Other');
     const current = rows.get(name) || { service: name, quantity: 0, amount: 0 };
@@ -1832,43 +2332,180 @@ export function laundryStatistics(tenant: string, period: 'today' | 'week' | 'li
   const orderValue = round(orders.reduce((sum, row) => sum + orderAmount(row), 0));
   const collectionTotal = round(payments.reduce((sum, row) => sum + normalizedFinancialAmount(tenant, 'payment', row, row.data.amount), 0));
   const repeatCustomers = frequency.filter((row) => row.visits > 1).length;
-  // Same split as `laundryDashboard()`'s `online` block — pre-finalization
-  // estimates from real pulled orders, never blended into the counter-only
-  // figures above — but windowed to this period's [from, to] instead of
-  // always-lifetime, matching the rest of this function's period scoping.
   const onlineOrders = store.listMarketplaceOrderProjections(tenant).filter((order) => {
     if (MARKETPLACE_TERMINAL_EXCLUDED.includes(order.state)) return false;
     const createdOn = String(order.createdAt || '').slice(0, 10);
-    return createdOn >= from && createdOn <= to;
+    return createdOn >= ranges.ordersReview.from && createdOn <= ranges.ordersReview.to;
   });
   const online = {
     count: onlineOrders.length,
     estimatedRevenue: round(onlineOrders.reduce((sum, order) => sum + (Number((order.request as Record<string, unknown> | undefined)?.payableAmountPaise) || 0) / 100, 0)),
     topGarments: marketplaceTopGarments(onlineOrders),
   };
-  return { period, from, to, ordersReview: { total: orders.length, breakdown: orderStates, daily: orderDaily }, revenue: { total: orderValue, averageOrderValue: orders.length ? round(orderValue / orders.length) : 0 }, collection: { total: collectionTotal, daily: collectionDaily }, customerFrequency: { total: frequency.length, repeatCustomers, breakdown: frequency }, newCustomer: { total: newCustomers.length, daily: newCustomerDaily }, serviceMix, online };
+  return {
+    period: ranges.ordersReview.period, from: ranges.ordersReview.from, to: ranges.ordersReview.to, ranges,
+    ordersReview: { total: orders.length, breakdown: orderStates, daily: orderDaily },
+    revenue: { total: orderValue, averageOrderValue: orders.length ? round(orderValue / orders.length) : 0 },
+    collection: { total: collectionTotal, daily: collectionDaily },
+    customerFrequency: { total: frequency.length, repeatCustomers, breakdown: frequency },
+    newCustomer: { total: newCustomers.length, daily: newCustomerDaily }, serviceMix, online,
+  };
 }
 
-export function laundryReportDetail(tenant: string, kind: LaundryReportKind, from?: string, to?: string, search?: string, page = 1, pageSize = 100, rowCap?: number, includeAll = false) {
+export function laundryReportDetail(tenant: string, kind: LaundryReportKind, from?: string, to?: string, search?: string, paymentMethod?: string, page = 1, pageSize = 100, rowCap?: number, includeAll = false, collectionView: 'invoice' | 'customer' = 'invoice', orderView: 'service' | 'invoice' = 'service', balanceView: 'invoice' | 'customer' = 'invoice') {
   const reportKinds: LaundryReportKind[] = ['invoice', 'collection', 'order', 'consolidated-invoices', 'customer', 'customer-package', 'customer-list', 'growth', 'discount', 'expense', 'balance', 'pickup', 'rider-delivery', 'rider-collection', 'warehouse-user-work'];
   if (!reportKinds.includes(kind)) throw new Error('unknown laundry report');
   const needle = String(search || '').trim().toLowerCase();
+  const paymentNeedle = String(paymentMethod || '').trim().toLowerCase();
   const inRange = (value: unknown) => (!from || String(value || '') >= from) && (!to || String(value || '') <= to);
-  const orders = store.rowsOfReportDate(tenant, 'laundry_order', 'order_date', from, to).map((row) => presentOrder(tenant, row)).filter((row) => !needle || `${row.orderNumber} ${row.invoiceNumber || ''} ${row.customer.name} ${row.customer.phone}`.toLowerCase().includes(needle));
+  const reportOrders = store.rowsOfReportDate(tenant, 'laundry_order', 'order_date', from, to).map((row) => presentOrder(tenant, row));
+  const collectionOrdersByInvoice = new Map<string, ReturnType<typeof presentOrder>>();
+  const collectionOrdersById = new Map<string, ReturnType<typeof presentOrder>>();
+  if (kind === 'collection') {
+    for (const row of store.rowsOf(tenant, 'laundry_order')) {
+      const order = presentOrder(tenant, row);
+      collectionOrdersById.set(order.id, order);
+      const invoiceId = String(row.data.invoice || '');
+      if (invoiceId) collectionOrdersByInvoice.set(invoiceId, order);
+    }
+  }
+  const orders = reportOrders.filter((row) => !needle || `${row.orderNumber} ${row.invoiceNumber || ''} ${row.customer.name} ${row.customer.phone}`.toLowerCase().includes(needle));
   const rows = (() => {
-    if (kind === 'invoice' || kind === 'consolidated-invoices') return orders.map((order) => ({ invoiceNumber: order.invoiceNumber || '', orderNumber: order.orderNumber, customer: order.customer.name, date: order.orderDate, amount: order.grandTotal, status: order.state, tax: Number((store.getRow(tenant, order.id)?.data.tax_amount) || 0) }));
-    if (kind === 'order') { const grouped = new Map<string, { service: string; garments: number; amount: number }>(); for (const order of orders) for (const item of order.items) { const key = item.serviceName; const value = grouped.get(key) || { service: key, garments: 0, amount: 0 }; value.garments += item.qty; value.amount += item.amount; grouped.set(key, value); } return [...grouped.values()].map((row) => ({ ...row, amount: Math.round(row.amount * 100) / 100 })); }
-    if (kind === 'discount') return orders.filter((order) => Number(store.getRow(tenant, order.id)?.data.discounts || 0) > 0).map((order) => { const raw = store.getRow(tenant, order.id)?.data || {}; return { orderNumber: order.orderNumber, date: order.orderDate, totalAmount: order.grandTotal, discount: Number(raw.discounts || 0), amountWithoutDiscount: Math.round((order.grandTotal + Number(raw.discounts || 0)) * 100) / 100 }; });
-    if (kind === 'balance') return orders.filter((order) => order.state !== 'Cancelled' && order.paymentStatus !== 'Paid').map((order) => ({ orderNumber: order.orderNumber, invoiceNumber: order.invoiceNumber || '', customer: order.customer.name, date: order.orderDate, total: order.grandTotal, status: order.paymentStatus }));
+    if (kind === 'invoice') return orders.map((order) => ({ invoiceNumber: order.invoiceNumber || '', amount: order.grandTotal, status: order.state, tax: Number((store.getRow(tenant, order.id)?.data.tax_amount) || 0) }));
+    if (kind === 'consolidated-invoices') return orders.map((order) => ({ invoiceNumber: order.invoiceNumber || '', orderNumber: order.orderNumber, customer: order.customer.name, date: order.orderDate, amount: order.grandTotal, status: order.state, tax: Number((store.getRow(tenant, order.id)?.data.tax_amount) || 0) }));
+    if (kind === 'order' && orderView === 'invoice') return orders.map((order) => ({ orderDate: order.orderDate, customerName: order.customer.name, orderNumber: order.orderNumber, invoiceNumber: order.invoiceNumber || '', totalGarments: order.items.reduce((sum, item) => sum + item.qty, 0), garmentSummary: [...new Map(order.items.map((item) => [item.garmentName, order.items.filter((candidate) => candidate.garmentName === item.garmentName).reduce((sum, candidate) => sum + candidate.qty, 0)])).entries()].map(([name, quantity]) => `${name} (${quantity})`).join(' ') }));
+    if (kind === 'order') { const grouped = new Map<string, { serviceName: string; totalGarments: number; garments: Map<string, number> }>(); for (const order of orders) for (const item of order.items) { const key = item.serviceName; const value = grouped.get(key) || { serviceName: key, totalGarments: 0, garments: new Map<string, number>() }; value.totalGarments += item.qty; value.garments.set(item.garmentName, (value.garments.get(item.garmentName) || 0) + item.qty); grouped.set(key, value); } return [...grouped.values()].map((row) => ({ serviceName: row.serviceName, totalGarments: row.totalGarments, garmentSummary: [...row.garments].map(([name, quantity]) => `${name} (${quantity})`).join(' ') })); }
+    if (kind === 'discount') {
+      const discountOrders = orders.filter((order) => order.state !== 'Cancelled');
+      if (needle && discountOrders.length === 0) return [];
+      const reportDates = from && to
+        ? dateList(from, to)
+        : [...new Set(discountOrders.map((order) => order.orderDate))].sort();
+      return reportDates.map((date) => {
+        const dayOrders = discountOrders.filter((order) => order.orderDate === date);
+        const totalAmount = round(dayOrders.reduce((sum, order) => sum + order.grandTotal, 0));
+        const discount = round(dayOrders.reduce((sum, order) => sum + Number(store.getRow(tenant, order.id)?.data.discounts || 0), 0));
+        return {
+          title: laundryReportDayTitle(date),
+          totalAmount,
+          discountAmount: discount,
+          amountWithoutDiscount: round(totalAmount + discount),
+        };
+      });
+    }
+    if (kind === 'balance') {
+      const balances = laundryBalanceRows(tenant).filter((row) => balanceView === 'customer'
+        ? (!needle || `${row.customer} ${row.phone}`.toLowerCase().includes(needle))
+        : (!needle || `${row.customer} ${row.phone} ${row.invoiceNumber} ${row.orderNumber}`.toLowerCase().includes(needle)));
+      if (balanceView !== 'customer') return balances.map(({ customer: customerName, phone, invoiceNumber, orderNumber, invoiceAmount, balanceAmount }) => ({ customer: customerName, phone, invoiceNumber, orderNumber, invoiceAmount, balanceAmount }));
+      const grouped = new Map<string, { customer: string; phone: string; invoiceAmount: number; balanceAmount: number }>();
+      for (const row of balances) {
+        const current = grouped.get(row.customerKey) || { customer: row.customer, phone: row.phone, invoiceAmount: 0, balanceAmount: 0 };
+        current.invoiceAmount = round(current.invoiceAmount + row.invoiceAmount);
+        current.balanceAmount = round(current.balanceAmount + row.balanceAmount);
+        grouped.set(row.customerKey, current);
+      }
+      return [...grouped.values()];
+    }
     if (kind === 'pickup') return orders.filter((order) => order.fulfillmentMode === 'Pickup Order').map((order) => ({ orderNumber: order.orderNumber, customer: order.customer.name, phone: order.customer.phone, date: order.orderDate, due: order.expectedDeliveryDate, state: order.state, rider: order.pickupRider?.name || '' }));
     if (kind === 'rider-delivery') return orders.filter((order) => order.fulfillmentMode !== 'Pickup Order').map((order) => ({ orderNumber: order.orderNumber, customer: order.customer.name, date: order.orderDate, due: order.expectedDeliveryDate, state: order.state, rider: order.deliveryRider?.name || '' }));
-    if (kind === 'collection') return store.rowsOfReportDate(tenant, 'payment_entry', 'posting_date', from, to).filter((row) => row.status === 'Submitted' && row.data.payment_type === 'Receive').map((row) => { const invoice = store.getRow(tenant, String(row.data.against_sales || '')); const order = orders.find((candidate) => candidate.invoiceNumber === invoice?.data.name || candidate.id === invoice?.data.laundry_order); return { invoiceNumber: invoice?.data.name || '', orderNumber: order?.orderNumber || '', amount: normalizedFinancialAmount(tenant, 'payment', row, row.data.amount), method: row.data.mode || 'Cash', date: row.data.posting_date, reference: row.data.reference || '' }; });
+    if (kind === 'collection') {
+      const receipts = store.rowsOfReportDate(tenant, 'payment_entry', 'posting_date', from, to).filter((row) => row.status === 'Submitted' && row.data.payment_type === 'Receive' && (!paymentNeedle || String(row.data.mode || 'Cash').toLowerCase() === paymentNeedle)).flatMap((row) => {
+        const invoice = store.getRow(tenant, String(row.data.against_sales || ''));
+        const linkedOrderId = String(invoice?.data.laundry_order || '');
+        const order = invoice ? collectionOrdersByInvoice.get(invoice.id) || (linkedOrderId ? collectionOrdersById.get(linkedOrderId) : undefined) : undefined;
+        const invoiceNumber = String(order?.invoiceNumber || invoice?.data.name || '');
+        const orderNumber = order?.orderNumber || '';
+        const reference = String(row.data.reference || '');
+        const customerName = order?.customer.name || '';
+        const phone = order?.customer.phone || '';
+        const searchable = `${invoiceNumber} ${orderNumber} ${customerName} ${phone} ${reference}`.toLowerCase();
+        if (collectionView === 'customer' ? (needle && !`${customerName} ${phone}`.toLowerCase().includes(needle)) : (needle && !searchable.includes(needle))) return [];
+        return [{ invoiceNumber, orderNumber, customerName, phone, customerKey: order?.customer.id || phone || invoiceNumber || orderNumber || reference, amount: normalizedFinancialAmount(tenant, 'payment', row, row.data.amount), method: row.data.mode || 'Cash', date: row.data.posting_date, reference }];
+      });
+      if (collectionView !== 'customer') return receipts.map(({ customerName: _customerName, phone: _phone, customerKey: _customerKey, ...receipt }) => receipt);
+      const customers = new Map<string, { customerName: string; phone: string; invoiceNumbers: Set<string>; paidAmount: number }>();
+      for (const receipt of receipts) {
+        const customerName = receipt.customerName || 'Unassigned customer';
+        const key = receipt.customerKey || receipt.invoiceNumber || receipt.orderNumber || receipt.reference || `${receipt.date}:${receipt.amount}`;
+        const customer = customers.get(key) || { customerName, phone: receipt.phone, invoiceNumbers: new Set<string>(), paidAmount: 0 };
+        customer.invoiceNumbers.add(receipt.invoiceNumber || receipt.orderNumber || receipt.reference || key);
+        customer.paidAmount += receipt.amount;
+        customers.set(key, customer);
+      }
+      return [...customers.values()].map((customer) => ({ customerName: customer.customerName, phone: customer.phone, paidInvoices: customer.invoiceNumbers.size, paidAmount: Math.round(customer.paidAmount * 100) / 100 }));
+    }
     if (kind === 'rider-collection') return listLaundryRiderSettlements(tenant, { from, to }).map((row) => ({ date: row.date, rider: row.rider, amount: row.amount, method: row.method, status: row.status, reference: row.reference }));
-    if (kind === 'expense') return listLaundryExpenses(tenant, { from, to }).map((row) => ({ date: row.expenseDate, expense: row.expenseName, receiver: row.paymentReceiver, invoiceNumber: row.invoiceNumber, amount: row.amount, status: row.status || 'Paid' }));
-    if (kind === 'customer-list') return store.rowsOfReportDate(tenant, 'party', 'created_at', from ? `${from}T00:00:00.000Z` : undefined, to ? `${to}T23:59:59.999Z` : undefined).filter((row) => row.data.is_customer && (!needle || `${row.data.name} ${row.data.phone}`.toLowerCase().includes(needle))).map((row) => ({ customer: row.data.name, phone: row.data.phone, date: row.created_at.slice(0, 10) }));
-    if (kind === 'customer') { const grouped = new Map<string, { customer: string; phone: string; revenue: number; visits: number; lastVisit: string }>(); for (const order of orders) { const value = grouped.get(order.customer.id || order.customer.phone) || { customer: order.customer.name, phone: order.customer.phone, revenue: 0, visits: 0, lastVisit: order.orderDate }; value.revenue += order.grandTotal; value.visits += 1; if (order.orderDate > value.lastVisit) value.lastVisit = order.orderDate; grouped.set(order.customer.id || order.customer.phone, value); } return [...grouped.values()].map((row) => ({ ...row, revenue: Math.round(row.revenue * 100) / 100, revenueWithoutTax: row.revenue, daysSinceVisit: Math.max(0, Math.floor((Date.now() - Date.parse(`${row.lastVisit}T00:00:00Z`)) / 86400000)) })); }
-    if (kind === 'customer-package') return store.rowsOfReportDate(tenant, 'customer_package', 'created_at', from ? `${from}T00:00:00.000Z` : undefined, to ? `${to}T23:59:59.999Z` : undefined).map((row) => ({ customer: store.getRow(tenant, String(row.data.customer))?.data.name || '', package: row.data.service_package, status: row.data.status, assigned: row.data.assigned_on || row.created_at.slice(0, 10), expires: row.data.expires_on || '' }));
+    if (kind === 'expense') {
+      const expenses = listLaundryExpenses(tenant, { from, to, search: needle });
+      if (needle && expenses.length === 0) return [];
+      const byDate = new Map<string, { expenseAmount: number; taxAmount: number; taxKnown: boolean; count: number }>();
+      for (const expense of expenses) {
+        const values = byDate.get(expense.expenseDate) || { expenseAmount: 0, taxAmount: 0, taxKnown: true, count: 0 };
+        values.expenseAmount += expense.amount;
+        values.count += 1;
+        const tax = store.getRow(tenant, expense.id)?.data.tax_amount;
+        if (tax === undefined || tax === null || !Number.isFinite(Number(tax))) values.taxKnown = false;
+        else values.taxAmount += Number(tax);
+        byDate.set(expense.expenseDate, values);
+      }
+      const reportDates = from && to ? dateList(from, to) : [...new Set(expenses.map((expense) => expense.expenseDate))].sort();
+      return reportDates.map((date) => {
+        const values = byDate.get(date);
+        const expenseAmount = round(values?.expenseAmount || 0);
+        const taxAmount = values?.count ? values.taxKnown ? round(values.taxAmount) : null : 0;
+        return { title: laundryReportDayTitle(date), expenseAmount, taxAmount, amountBeforeTax: taxAmount === null ? null : round(expenseAmount - taxAmount) };
+      });
+    }
+    if (kind === 'customer-list') return store.rowsOfReportDate(tenant, 'party', 'created_at', from ? `${from}T00:00:00.000Z` : undefined, to ? `${to}T23:59:59.999Z` : undefined)
+      .filter((row) => row.data.is_customer && (!needle || `${row.data.name} ${row.data.phone}`.toLowerCase().includes(needle)))
+      .map((row) => ({ customer: row.data.name, phone: row.data.phone }));
+    if (kind === 'customer') {
+      const grouped = new Map<string, { customer: string; phone: string; revenue: number; revenueWithoutTax: number; visits: number; lastVisitedDate: string }>();
+      for (const order of orders) {
+        if (order.state === 'Cancelled') continue;
+        const key = order.customer.id || order.customer.phone || order.customer.name;
+        const value = grouped.get(key) || { customer: order.customer.name, phone: order.customer.phone, revenue: 0, revenueWithoutTax: 0, visits: 0, lastVisitedDate: order.orderDate };
+        const tax = Math.max(0, Number(store.getRow(tenant, order.id)?.data.tax_amount || 0));
+        value.revenue += order.grandTotal;
+        value.revenueWithoutTax += Math.max(0, order.grandTotal - tax);
+        value.visits += 1;
+        if (order.orderDate > value.lastVisitedDate) value.lastVisitedDate = order.orderDate;
+        grouped.set(key, value);
+      }
+      const asOf = to || today();
+      const daysBetween = (later: string, earlier: string) => Math.max(0, Math.floor((Date.parse(`${later}T00:00:00Z`) - Date.parse(`${earlier}T00:00:00Z`)) / 86400000));
+      return [...grouped.values()].map((row) => ({
+        ...row,
+        revenue: Math.round(row.revenue * 100) / 100,
+        revenueWithoutTax: Math.round(row.revenueWithoutTax * 100) / 100,
+        daysSinceVisit: daysBetween(asOf, row.lastVisitedDate),
+        reviews: '',
+      }));
+    }
+    if (kind === 'customer-package') return store.rowsOfReportDate(tenant, 'customer_package', 'purchased_date', from, to)
+      .filter((row) => row.status !== 'Cancelled' && row.data.status !== 'Cancelled')
+      .map((row) => {
+        const customer = store.getRow(tenant, String(row.data.customer));
+        const definition = store.getRow(tenant, String(row.data.service_package));
+        return {
+          customer: customer?.data.name || '',
+          packageName: definition?.data.name || 'Package unavailable',
+          packageAmount: Number(row.data.contract_price ?? definition?.data.price ?? 0),
+          status: row.data.status || '',
+          assigned: row.data.purchased_date || row.created_at.slice(0, 10),
+          expires: row.data.expires_on || '',
+        };
+      })
+      .filter((row) => !needle || `${row.customer} ${row.packageName} ${row.status}`.toLowerCase().includes(needle));
     if (kind === 'warehouse-user-work') return store.rowsOf(tenant, 'laundry_fulfillment_event').filter((row) => inRange(row.data.event_date)).map((row) => ({ date: row.data.event_date, actor: row.created_by, order: row.data.order, stage: row.data.stage, quantity: row.data.quantity, unit: row.data.unit }));
+    if (kind === 'growth') {
+      const activeOrders = orders.filter((order) => order.state !== 'Cancelled');
+      if (needle && activeOrders.length === 0) return [];
+      const total = round(activeOrders.reduce((sum, order) => sum + order.grandTotal, 0));
+      const tax = round(activeOrders.reduce((sum, order) => sum + Number(store.getRow(tenant, order.id)?.data.tax_amount || 0), 0));
+      return [{ total, tax, amountWithoutTax: round(total - tax) }];
+    }
     const summary = laundryReports(tenant, from, to).summary;
     const activeTax = orders
       .filter((order) => order.state !== 'Cancelled')
@@ -1883,7 +2520,107 @@ export function laundryReportDetail(tenant: string, kind: LaundryReportKind, fro
   const totalPages = Math.max(1, Math.ceil(availableRows / boundedPageSize));
   const safePage = Math.max(1, Math.min(totalPages, Math.floor(Number(page) || 1)));
   const offset = (safePage - 1) * boundedPageSize;
-  return { kind, from: from || null, to: to || null, columns: totalRows ? Object.keys(rows[0]) : [], rows: cappedRows.slice(offset, offset + boundedPageSize), totalRows, page: safePage, pageSize: boundedPageSize, totalPages, exportCap: boundedCap ?? null, exportTruncated: boundedCap !== undefined && totalRows > boundedCap };
+  const emptyColumns = kind === 'collection' ? (collectionView === 'customer' ? ['customerName', 'phone', 'paidInvoices', 'paidAmount'] : ['invoiceNumber', 'orderNumber', 'amount', 'method', 'date', 'reference']) : [];
+  const summary = kind === 'invoice' ? { label: 'Total Invoice Amount', value: rows.reduce((sum, row) => sum + (Number((row as Record<string, unknown>).amount) || 0), 0), format: 'currency' as const } : kind === 'order' ? { label: 'Total Garment Count', value: rows.reduce((sum, row) => sum + (Number((row as Record<string, unknown>).totalGarments) || 0), 0), format: 'count' as const } : kind === 'customer' ? { label: 'Total Revenue', value: rows.reduce((sum, row) => sum + (Number((row as Record<string, unknown>).revenue) || 0), 0), format: 'currency' as const } : kind === 'customer-package' ? { label: 'Total Package Amount', value: rows.reduce((sum, row) => sum + (Number((row as Record<string, unknown>).packageAmount) || 0), 0), format: 'currency' as const } : kind === 'discount' ? { label: 'Total Discount Amount', value: rows.reduce((sum, row) => sum + (Number((row as Record<string, unknown>).discountAmount) || 0), 0), format: 'currency' as const } : kind === 'expense' ? { label: 'Total Expense', value: rows.reduce((sum, row) => sum + (Number((row as Record<string, unknown>).expenseAmount) || 0), 0), format: 'currency' as const } : kind === 'balance' ? { label: 'Total Balance Amount', value: rows.reduce((sum, row) => sum + (Number((row as Record<string, unknown>).balanceAmount) || 0), 0), format: 'currency' as const } : undefined;
+  const noDataColumns = kind === 'invoice' ? ['invoiceNumber', 'amount', 'status', 'tax'] : kind === 'order' ? orderView === 'invoice' ? ['orderDate', 'customerName', 'orderNumber', 'invoiceNumber', 'totalGarments', 'garmentSummary'] : ['serviceName', 'totalGarments', 'garmentSummary'] : kind === 'customer' ? ['customer', 'phone', 'revenue', 'revenueWithoutTax', 'visits', 'lastVisitedDate', 'daysSinceVisit', 'reviews'] : kind === 'customer-package' ? ['customer', 'packageName', 'packageAmount', 'status', 'assigned', 'expires'] : kind === 'customer-list' ? ['customer', 'phone'] : kind === 'growth' ? ['total', 'tax', 'amountWithoutTax'] : kind === 'discount' ? ['title', 'totalAmount', 'discountAmount', 'amountWithoutDiscount'] : kind === 'expense' ? ['title', 'expenseAmount', 'taxAmount', 'amountBeforeTax'] : kind === 'balance' ? balanceView === 'customer' ? ['customer', 'phone', 'invoiceAmount', 'balanceAmount'] : ['customer', 'phone', 'invoiceNumber', 'orderNumber', 'invoiceAmount', 'balanceAmount'] : emptyColumns;
+  return { kind, from: kind === 'balance' ? null : from || null, to: kind === 'balance' ? null : to || null, columns: totalRows ? Object.keys(rows[0]) : noDataColumns, rows: cappedRows.slice(offset, offset + boundedPageSize), totalRows, page: safePage, pageSize: boundedPageSize, totalPages, exportCap: boundedCap ?? null, exportTruncated: boundedCap !== undefined && totalRows > boundedCap, ...(summary ? { summary } : {}) };
+}
+
+export function laundryReportChart(tenant: string, kind: LaundryReportKind, from?: string, to?: string, paymentMethod?: string) {
+  const end = to || today();
+  const start = from || shiftDate(end, -6);
+  if (start > end) throw new Error('chart start date must not be after end date');
+  if (kind === 'balance') {
+    const byDate = new Map<string, number>();
+    for (const row of laundryBalanceRows(tenant)) {
+      if (row.date < start || row.date > end) continue;
+      byDate.set(row.date, round((byDate.get(row.date) || 0) + row.balanceAmount));
+    }
+    return { kind, from: start, to: end, metric: 'Balance amount', points: dateList(start, end).map((date) => ({ label: date, value: byDate.get(date) || 0 })) };
+  }
+  const detail = laundryReportDetail(tenant, kind, start, end, undefined, paymentMethod, 1, 100, undefined, true);
+  const rows = detail.rows as Array<Record<string, unknown>>;
+
+  if (kind === 'growth' || kind === 'expense') {
+    const series = laundryReports(tenant, start, end).trend;
+    return {
+      kind, from: start, to: end,
+      metric: kind === 'growth' ? 'Order value' : 'Expenses',
+      points: series.map((point) => ({ label: point.date, value: kind === 'growth' ? point.orderValue : point.expenses })),
+    };
+  }
+
+  if (kind === 'order') {
+    const byService = new Map<string, number>();
+    for (const order of listLaundryOrders(tenant, { from: start, to: end })) for (const item of order.items) byService.set(item.serviceName, round((byService.get(item.serviceName) || 0) + item.amount));
+    return { kind, from: start, to: end, metric: 'Service amount', points: [...byService].map(([label, value]) => ({ label, value })) };
+  }
+
+  if (kind === 'invoice') {
+    const byDate = new Map<string, number>();
+    for (const order of listLaundryOrders(tenant, { from: start, to: end })) byDate.set(order.orderDate, round((byDate.get(order.orderDate) || 0) + order.grandTotal));
+    return { kind, from: start, to: end, metric: 'Invoice amount', points: dateList(start, end).map((date) => ({ label: date, value: byDate.get(date) || 0 })) };
+  }
+
+  if (kind === 'discount') {
+    const byDate = new Map<string, number>();
+    for (const order of listLaundryOrders(tenant, { from: start, to: end })) {
+      if (order.state === 'Cancelled') continue;
+      byDate.set(order.orderDate, round((byDate.get(order.orderDate) || 0) + order.discounts));
+    }
+    return { kind, from: start, to: end, metric: 'Discount amount', points: dateList(start, end).map((date) => ({ label: date, value: byDate.get(date) || 0 })) };
+  }
+
+  if (kind === 'customer') {
+    const byDate = new Map<string, number>();
+    for (const order of listLaundryOrders(tenant, { from: start, to: end })) {
+      if (order.state === 'Cancelled') continue;
+      byDate.set(order.orderDate, round((byDate.get(order.orderDate) || 0) + order.grandTotal));
+    }
+    return { kind, from: start, to: end, metric: 'Customer revenue', points: dateList(start, end).map((date) => ({ label: date, value: byDate.get(date) || 0 })) };
+  }
+
+  if (kind === 'customer-list') {
+    const byCreatedDate = new Map<string, number>();
+    for (const row of store.rowsOfReportDate(tenant, 'party', 'created_at', `${start}T00:00:00.000Z`, `${end}T23:59:59.999Z`)) {
+      if (!row.data.is_customer) continue;
+      const date = row.created_at.slice(0, 10);
+      byCreatedDate.set(date, (byCreatedDate.get(date) || 0) + 1);
+    }
+    return { kind, from: start, to: end, metric: 'New customers', points: dateList(start, end).map((date) => ({ label: date, value: byCreatedDate.get(date) || 0 })) };
+  }
+
+  const dateKey = ['date', 'postingDate', 'lastVisitedDate', 'lastVisit', 'assigned', 'expires', 'eventDate'].find((key) => detail.columns.includes(key));
+  const metricKey = ['amount', 'revenue', 'total', 'discount', 'quantity', 'tax'].find((key) => rows.some((row) => Number.isFinite(Number(row[key]))));
+  const valueFor = (row: Record<string, unknown>) => metricKey ? Number(row[metricKey]) || 0 : 1;
+
+  if (dateKey) {
+    const byDate = new Map<string, number>();
+    for (const row of rows) {
+      const label = String(row[dateKey] || '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(label) || label < start || label > end) continue;
+      byDate.set(label, (byDate.get(label) || 0) + valueFor(row));
+    }
+    const dates = dateList(start, end);
+    const labels = dates.length && dates[dates.length - 1] === end ? dates : [...byDate.keys()].sort();
+    return {
+      kind, from: start, to: end,
+      metric: metricKey ? metricKey.replace(/([A-Z])/g, ' $1') : 'Records',
+      points: labels.map((label) => ({ label, value: byDate.get(label) || 0 })),
+    };
+  }
+
+  const categoryKey = ['service', 'stage', 'status', 'package', 'title'].find((key) => detail.columns.includes(key));
+  if (categoryKey) {
+    const byCategory = new Map<string, number>();
+    for (const row of rows) {
+      const label = String(row[categoryKey] || 'Other');
+      byCategory.set(label, (byCategory.get(label) || 0) + valueFor(row));
+    }
+    return { kind, from: start, to: end, metric: metricKey ? metricKey.replace(/([A-Z])/g, ' $1') : 'Records', points: [...byCategory].map(([label, value]) => ({ label, value })) };
+  }
+
+  return { kind, from: start, to: end, metric: 'Records', points: [] as Array<{ label: string; value: number }> };
 }
 
 /**
@@ -1894,7 +2631,7 @@ export function laundryReportDetail(tenant: string, kind: LaundryReportKind, fro
  */
 export function laundryReportDetailStream(tenant: string, kind: LaundryReportKind, from?: string, to?: string, search?: string): { columns: string[]; rows: Iterable<Record<string, unknown>> } | undefined {
   const needle = String(search || '').trim().toLowerCase();
-  const streamable = new Set<LaundryReportKind>(['invoice', 'consolidated-invoices', 'balance', 'pickup', 'rider-delivery', 'customer-list', 'customer-package']);
+  const streamable = new Set<LaundryReportKind>(['invoice', 'consolidated-invoices', 'pickup', 'rider-delivery', 'customer-list', 'customer-package']);
   if (!streamable.has(kind)) return undefined;
   const orderRows = function* () {
     for (const raw of store.iterateRowsOfReportDate(tenant, 'laundry_order', 'order_date', from, to)) {
@@ -1902,12 +2639,20 @@ export function laundryReportDetailStream(tenant: string, kind: LaundryReportKin
       if (!needle || `${order.orderNumber} ${order.invoiceNumber || ''} ${order.customer.name} ${order.customer.phone}`.toLowerCase().includes(needle)) yield order;
     }
   };
-  if (kind === 'invoice' || kind === 'consolidated-invoices') return { columns: ['invoiceNumber', 'orderNumber', 'customer', 'date', 'amount', 'status', 'tax'], rows: (function* () { for (const order of orderRows()) yield { invoiceNumber: order.invoiceNumber || '', orderNumber: order.orderNumber, customer: order.customer.name, date: order.orderDate, amount: order.grandTotal, status: order.state, tax: Number(store.getRow(tenant, order.id)?.data.tax_amount || 0) }; })() };
-  if (kind === 'balance') return { columns: ['orderNumber', 'invoiceNumber', 'customer', 'date', 'total', 'status'], rows: (function* () { for (const order of orderRows()) if (order.state !== 'Cancelled' && order.paymentStatus !== 'Paid') yield { orderNumber: order.orderNumber, invoiceNumber: order.invoiceNumber || '', customer: order.customer.name, date: order.orderDate, total: order.grandTotal, status: order.paymentStatus }; })() };
+  if (kind === 'invoice') return { columns: ['invoiceNumber', 'amount', 'status', 'tax'], rows: (function* () { for (const order of orderRows()) yield { invoiceNumber: order.invoiceNumber || '', amount: order.grandTotal, status: order.state, tax: Number(store.getRow(tenant, order.id)?.data.tax_amount || 0) }; })() };
+  if (kind === 'consolidated-invoices') return { columns: ['invoiceNumber', 'orderNumber', 'customer', 'date', 'amount', 'status', 'tax'], rows: (function* () { for (const order of orderRows()) yield { invoiceNumber: order.invoiceNumber || '', orderNumber: order.orderNumber, customer: order.customer.name, date: order.orderDate, amount: order.grandTotal, status: order.state, tax: Number(store.getRow(tenant, order.id)?.data.tax_amount || 0) }; })() };
   if (kind === 'pickup') return { columns: ['orderNumber', 'customer', 'phone', 'date', 'due', 'state', 'rider'], rows: (function* () { for (const order of orderRows()) if (order.fulfillmentMode === 'Pickup Order') yield { orderNumber: order.orderNumber, customer: order.customer.name, phone: order.customer.phone, date: order.orderDate, due: order.expectedDeliveryDate, state: order.state, rider: order.pickupRider?.name || '' }; })() };
   if (kind === 'rider-delivery') return { columns: ['orderNumber', 'customer', 'date', 'due', 'state', 'rider'], rows: (function* () { for (const order of orderRows()) if (order.fulfillmentMode !== 'Pickup Order') yield { orderNumber: order.orderNumber, customer: order.customer.name, date: order.orderDate, due: order.expectedDeliveryDate, state: order.state, rider: order.deliveryRider?.name || '' }; })() };
-  if (kind === 'customer-list') return { columns: ['customer', 'phone', 'date'], rows: (function* () { const lower = needle; for (const row of store.iterateRowsOfReportDate(tenant, 'party', 'created_at', from ? `${from}T00:00:00.000Z` : undefined, to ? `${to}T23:59:59.999Z` : undefined)) if (row.data.is_customer && (!lower || `${row.data.name} ${row.data.phone}`.toLowerCase().includes(lower))) yield { customer: row.data.name, phone: row.data.phone, date: row.created_at.slice(0, 10) }; })() };
-  return { columns: ['customer', 'package', 'status', 'assigned', 'expires'], rows: (function* () { for (const row of store.iterateRowsOfReportDate(tenant, 'customer_package', 'created_at', from ? `${from}T00:00:00.000Z` : undefined, to ? `${to}T23:59:59.999Z` : undefined)) yield { customer: store.getRow(tenant, String(row.data.customer))?.data.name || '', package: row.data.service_package, status: row.data.status, assigned: row.data.assigned_on || row.created_at.slice(0, 10), expires: row.data.expires_on || '' }; })() };
+  if (kind === 'customer-list') return { columns: ['customer', 'phone'], rows: (function* () { for (const row of store.iterateRowsOfReportDate(tenant, 'party', 'created_at', from ? `${from}T00:00:00.000Z` : undefined, to ? `${to}T23:59:59.999Z` : undefined)) if (row.data.is_customer && (!needle || `${row.data.name} ${row.data.phone}`.toLowerCase().includes(needle))) yield { customer: row.data.name, phone: row.data.phone }; })() };
+  return { columns: ['customer', 'packageName', 'packageAmount', 'status', 'assigned', 'expires'], rows: (function* () {
+    for (const row of store.iterateRowsOfReportDate(tenant, 'customer_package', 'purchased_date', from, to)) {
+      if (row.status === 'Cancelled' || row.data.status === 'Cancelled') continue;
+      const customer = store.getRow(tenant, String(row.data.customer));
+      const definition = store.getRow(tenant, String(row.data.service_package));
+      const reportRow = { customer: customer?.data.name || '', packageName: definition?.data.name || 'Package unavailable', packageAmount: Number(row.data.contract_price ?? definition?.data.price ?? 0), status: row.data.status || '', assigned: row.data.purchased_date || row.created_at.slice(0, 10), expires: row.data.expires_on || '' };
+      if (!needle || `${reportRow.customer} ${reportRow.packageName} ${reportRow.status}`.toLowerCase().includes(needle)) yield reportRow;
+    }
+  })() };
 }
 
 type TrendPoint = { date: string; orders: number; orderValue: number; collected: number; expenses: number };
@@ -2017,6 +2762,7 @@ export function receiptFor(tenant: string, order: EntityRow) {
     charges: Number(order.data.charges || 0),
     discounts: Number(order.data.discounts || 0),
     taxAmount: Number(order.data.tax_amount || 0),
+    breakdown: display.breakdown,
     grandTotal: Number(order.data.grand_total || 0),
     paymentMode: order.data.payment_mode,
     paymentStatus: order.data.payment_status,
@@ -2065,9 +2811,10 @@ export function tagsFor(tenant: string, order: EntityRow) {
 
 export function containerTagsFor(tenant: string, order: EntityRow) {
   const display = presentOrder(tenant, order);
+  const orderWeightKg = round(display.items.filter((item: any) => String(item.unit || '') === 'Kilogram').reduce((sum: number, item: any) => sum + Number(item.qty || 0), 0));
   return store.listLaundryContainers(tenant, order.id).map((container) => ({
     tagNumber: container.tagCode, containerId: container.id, tagKind: 'container' as const, orderNumber: display.orderNumber,
-    invoiceNumber: display.invoiceNumber, customer: display.customer.name, customerPhone: display.customer.phone, garment: `Laundry bag ${container.sequence} / ${container.total}`, service: container.weightKg === undefined ? 'Bulk container' : `${container.weightKg} kg total`,
+    invoiceNumber: display.invoiceNumber, customer: display.customer.name, customerPhone: display.customer.phone, garment: `Laundry bag ${container.sequence} / ${container.total}`, service: orderWeightKg > 0 ? `Order total ${orderWeightKg} kg; individual bag weight not recorded` : 'Bulk container',
     sequence: container.sequence, total: container.total, tagPayload: `ELB:v1:${container.tagCode}`, orderDate: display.orderDate, expectedDeliveryDate: display.expectedDeliveryDate,
     state: container.state, notes: display.notes, express: display.fulfillmentMode === 'Express Delivery', specialCare: /special|care|delicate|stain/i.test(String(display.notes || '')),
   }));

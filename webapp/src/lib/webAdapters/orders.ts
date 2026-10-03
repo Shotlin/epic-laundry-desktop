@@ -71,7 +71,7 @@ export function laundryOrder(order: RealOrder): LaundryOrder {
 type Detail = {
   order: RealOrder
   units: Array<{ id: string; tagCode: string; sequence: number; itemIndex: number; state: string; location: string; condition: string; garmentName: string; createdAt: string; updatedAt: string }>
-  containers: Array<{ id: string; tagCode: string; sequence: number; total: number; weightKg: number | null; state: string; location: string; condition: string; createdAt: string; updatedAt: string; deliveredAt?: string }>
+  containers: Array<{ id: string; tagCode: string; sequence: number; total: number; weightKg: number | null; orderWeightKg?: number; state: string; location: string; condition: string; createdAt: string; updatedAt: string; deliveredAt?: string }>
   payments: Array<{ id: string; amountPaise: number; mode: string; reference: string | null; createdAt: string }>
   history?: Array<{ id: string; from: string | null; to: string; note: string | null; by: string | null; at: string }>
 }
@@ -293,7 +293,8 @@ route('GET', '/laundry/customer-insights', async ({ get }) => {
 
 route('GET', '/laundry/customers/:id', async ({ get, params }) => {
   const profile = await get(`/vendor/counter/customers/${params.id}`)
-  const orders = (profile.orders as RealOrder[]).map((order) => {
+  const sourceOrders = Array.isArray(profile.orders) ? profile.orders as RealOrder[] : []
+  const orders = sourceOrders.map((order) => {
     const shaped = laundryOrder(order)
     return {
       id: shaped.id, orderNumber: shaped.orderNumber, orderDate: shaped.orderDate, state: shaped.state, grandTotal: shaped.grandTotal, invoice: shaped.orderNumber,
@@ -301,17 +302,27 @@ route('GET', '/laundry/customers/:id', async ({ get, params }) => {
       items: shaped.items.map((item) => ({ garment: item.garment, service: item.service, qty: item.qty })), serviceZone: shaped.serviceZone, deliveryAddress: shaped.deliveryAddress, notes: shaped.notes,
     }
   })
-  const active = (profile.orders as RealOrder[]).filter((order) => order.status !== 'CANCELLED')
+  const active = sourceOrders.filter((order) => order.status !== 'CANCELLED')
+  const orderStatus = orders.reduce<Record<string, number>>((counts, order) => {
+    counts[order.state] = (counts[order.state] || 0) + 1
+    return counts
+  }, {})
   return {
-    customer: { id: profile.customer.id, name: profile.customer.name || '', phone: profile.customer.phone || '', email: profile.customer.email || '', address: '' },
+    customer: { id: profile.customer.id, name: profile.customer.name || '', phone: profile.customer.phone || '', email: profile.customer.email || '', address: '', notes: '', preferredContact: undefined, servicePreferences: undefined, marketingConsent: undefined },
     metrics: {
       revenue: rupees(active.reduce((sum, order) => sum + order.totalPaise, 0)),
       orderBalance: rupees(active.reduce((sum, order) => sum + Math.max(0, order.totalPaise - order.amountPaidPaise), 0)),
-      walletBalance: 0, rewardPoints: 0, lastVisit: active[0]?.placedAt ? String(active[0].placedAt).slice(0, 10) : null, currentPackage: null,
+      lastVisit: active[0]?.placedAt ? String(active[0].placedAt).slice(0, 10) : null,
+      orderStatus,
     },
     addresses: [],
     orders,
+    consents: [],
+    marketplace: { links: [], orders: [] },
     ledger: [],
+    wallet: [],
+    rewards: [],
     timeline: active.slice(0, 10).map((order) => ({ at: order.placedAt, type: 'order', label: `Order ${order.orderNumber} booked`, amount: rupees(order.totalPaise), reason: '' })),
+    reconciliation: { note: 'This connected profile feed includes order totals and order activity only. Wallet, rewards, customer ledger, saved addresses, and package details are not provided here.' },
   }
 })

@@ -31,8 +31,8 @@ export function summaryRows(input: {
     tax: input.taxAmount > 0 ? { label: "GST", percent: input.taxRate || null, amount: input.taxAmount } : null,
   };
   const rows: SummaryRow[] = [{ key: "subtotal", label: "Subtotal", amount: input.subtotal, kind: "subtotal" }];
-  breakdown.charges.forEach((line, index) => rows.push({ key: `charge-${index}`, label: line.label, amount: line.amount, kind: "charge" }));
-  breakdown.discounts.forEach((line, index) => rows.push({ key: `discount-${index}`, label: line.label, amount: line.amount, kind: "discount" }));
+  breakdown.charges.forEach((line, index) => rows.push({ key: `charge-${index}`, label: line.percent === null ? line.label : `${line.label} (${percentText(line.percent)}%)`, amount: line.amount, kind: "charge" }));
+  breakdown.discounts.forEach((line, index) => rows.push({ key: `discount-${index}`, label: line.percent === null ? line.label : `${line.label} (${percentText(line.percent)}%)`, amount: line.amount, kind: "discount" }));
   if (breakdown.tax && breakdown.tax.amount > 0) {
     const percent = breakdown.tax.percent ?? input.taxRate ?? null;
     rows.push({ key: "tax", label: percent ? `${breakdown.tax.label || "GST"} (${percentText(percent)}%)` : breakdown.tax.label || "GST", amount: breakdown.tax.amount, kind: "tax" });

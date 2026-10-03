@@ -2,14 +2,18 @@ import { type FormEvent, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Building2,
+  Boxes,
   CheckCircle2,
   Circle,
+  ChevronRight,
   HardDrive,
   KeyRound,
   MapPinned,
   Pencil,
   Plus,
   Printer,
+  QrCode,
+  Tags,
   Save,
   ShieldCheck,
   UserRound,
@@ -21,6 +25,7 @@ import QRCode from "qrcode";
 import { TagLabelPreview } from "@/components/laundry/TagFormatBar";
 import { PRINTER_DPI_OPTIONS, TAG_FORMATS, findTagFormat } from "@/lib/tagFormats";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import { isWebOnly } from "@/lib/cloudAuth";
 
 type TagTemplate = {
   /** One of the formats in lib/tagFormats.ts, or "custom". */
@@ -57,13 +62,24 @@ type TagTemplate = {
 type Settings = {
   businessName: string;
   address: string;
+  addressLine1: string;
+  addressLine2: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  landmark: string;
+  description: string;
+  googleReviewUrl: string;
+  termsAndConditions: string;
   phone: string;
   email: string;
   upiId: string;
   qrOnPrint: boolean;
   logoDataUrl: string;
   taxMode: "none" | "gst";
+  taxSameAsCompany: boolean;
   gstin: string;
+  orderNoSeries: Array<{ id: string; name: string; prefix: string; createdAt: string }>;
   currency: string;
   timezone: string;
   printerProfile: string;
@@ -165,6 +181,7 @@ type Branch = {
   enabled: boolean;
   roles: Role[];
 };
+type Session = { user: { storeId: string } | null };
 type Diagnostics = {
   format: string;
   version: number;
@@ -350,13 +367,24 @@ const defaultTagTemplate: TagTemplate = {
 const blank: Settings = {
   businessName: "",
   address: "",
+  addressLine1: "",
+  addressLine2: "",
+  city: "",
+  state: "",
+  postalCode: "",
+  landmark: "",
+  description: "",
+  googleReviewUrl: "",
+  termsAndConditions: "",
   phone: "",
   email: "",
   upiId: "",
   qrOnPrint: false,
   logoDataUrl: "",
   taxMode: "none",
+  taxSameAsCompany: false,
   gstin: "",
+  orderNoSeries: [],
   currency: "INR",
   timezone: "Asia/Kolkata",
   printerProfile: "",
@@ -416,6 +444,18 @@ const settingsAreas = [
   },
 ] as const;
 
+function DirectoryTabLink({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex min-h-9 w-full items-center justify-between rounded-lg px-2 text-left text-xs font-bold text-[#39786f] hover:bg-[#f4f8f5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#664cf0]"
+    >
+      {label}<ChevronRight className="h-4 w-4 shrink-0" />
+    </button>
+  );
+}
+
 export default function LaundrySettings() {
   const queryClient = useQueryClient();
   const settings = useQuery({
@@ -434,6 +474,11 @@ export default function LaundrySettings() {
     queryKey: ["branch-memberships"],
     queryFn: () => apiGet<Branch[]>("/settings/stores"),
   });
+  const session = useQuery({
+    queryKey: ["auth-session"],
+    queryFn: () => apiGet<Session>("/auth/session"),
+  });
+  const currentBranch = branches.data?.find((branch) => branch.id === session.data?.user?.storeId);
   const diagnostics = useQuery({
     queryKey: ["support-diagnostics"],
     queryFn: () => apiGet<Diagnostics>("/ops/diagnostics"),
@@ -455,7 +500,10 @@ export default function LaundrySettings() {
   });
   const [form, setForm] = useState<Settings>(blank);
   const [notice, setNotice] = useState("");
+  const [profileTab, setProfileTab] = useState<"store-details" | "address-details" | "upi-qr">("store-details");
   const [qrPreview, setQrPreview] = useState("");
+  const [qrPreviewDraftKey, setQrPreviewDraftKey] = useState("");
+  const [qrError, setQrError] = useState("");
   const [draft, setDraft] = useState<StaffDraft>(blankStaff);
   const [editing, setEditing] = useState<Staff | null>(null);
   const [linkedIdentity, setLinkedIdentity] = useState("");
@@ -478,13 +526,39 @@ export default function LaundrySettings() {
   } | null>(null);
   type SettingsAreaId = (typeof settingsAreas)[number]["id"];
   const [activeArea, setActiveArea] = useState<SettingsAreaId>("workspace-setup");
+  const openSettingsArea = (area: SettingsAreaId) => {
+    setActiveArea(area);
+    requestAnimationFrame(() => document.getElementById("settings-areas")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
+  function updateAddressPart(field: "addressLine1" | "addressLine2" | "city" | "state" | "postalCode" | "landmark", value: string) {
+    setForm((current) => {
+      const next = { ...current, [field]: value };
+      next.address = [
+        next.addressLine1,
+        next.addressLine2,
+        [next.city, next.state, next.postalCode].filter(Boolean).join(", "),
+        next.landmark,
+      ].filter(Boolean).join(", ");
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (settings.data)
       setForm({
         ...blank,
         ...settings.data,
+        addressLine1: settings.data.addressLine1 || settings.data.address || "",
+        addressLine2: settings.data.addressLine2 || "",
+        city: settings.data.city || "",
+        state: settings.data.state || "",
+        postalCode: settings.data.postalCode || "",
+        landmark: settings.data.landmark || "",
+        description: settings.data.description || "",
+        googleReviewUrl: settings.data.googleReviewUrl || "",
+        termsAndConditions: settings.data.termsAndConditions || "",
         taxMode: settings.data.taxMode || "none",
+        taxSameAsCompany: Boolean(settings.data.taxSameAsCompany),
         gstin: settings.data.gstin || "",
         currency: settings.data.currency || "INR",
         timezone: settings.data.timezone || "Asia/Kolkata",
@@ -513,21 +587,33 @@ export default function LaundrySettings() {
       .then(setBackupHealth)
       .catch(() => setBackupHealth(null));
   }, []);
-  useEffect(() => {
-    const upiId = form.upiId.trim();
-    if (!upiId) {
+  const savedUpiId = String(settings.data?.upiId || "").trim();
+  const savedQrOnPrint = settings.data?.qrOnPrint ?? false;
+  const draftUpiId = form.upiId.trim();
+  const validDraftUpi = /^[A-Za-z0-9][A-Za-z0-9._-]{1,127}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,62}[A-Za-z0-9])?$/.test(draftUpiId);
+  const qrSettingsChanged = draftUpiId !== savedUpiId || form.qrOnPrint !== savedQrOnPrint;
+  const qrCanUpdate = qrSettingsChanged && (draftUpiId ? validDraftUpi : !form.qrOnPrint);
+  const currentQrDraftKey = `${draftUpiId}\u0000${form.businessName.trim() || "Epic Laundry"}`;
+  const qrPreviewMatchesDraft = Boolean(qrPreview && qrPreviewDraftKey === currentQrDraftKey);
+
+  async function generateQrPreview() {
+    if (!validDraftUpi) return;
+    setQrError("");
+    const payload = `upi://pay?pa=${encodeURIComponent(draftUpiId)}&pn=${encodeURIComponent(form.businessName || "Epic Laundry")}&cu=INR`;
+    try {
+      const dataUrl = await QRCode.toDataURL(payload, {
+        width: 220,
+        margin: 1,
+        color: { dark: "#123039", light: "#ffffff" },
+      });
+      setQrPreview(dataUrl);
+      setQrPreviewDraftKey(currentQrDraftKey);
+    } catch {
       setQrPreview("");
-      return;
+      setQrPreviewDraftKey("");
+      setQrError("The QR preview could not be generated. Check the UPI ID and try again.");
     }
-    const payload = `upi://pay?pa=${encodeURIComponent(upiId)}&pn=${encodeURIComponent(form.businessName || "Epic Laundry")}&cu=INR`;
-    QRCode.toDataURL(payload, {
-      width: 220,
-      margin: 1,
-      color: { dark: "#123039", light: "#ffffff" },
-    })
-      .then(setQrPreview)
-      .catch(() => setQrPreview(""));
-  }, [form.businessName, form.upiId]);
+  }
 
   const saveProgress = useMutation({
     mutationFn: (input: Partial<NonNullable<Settings["setupProgress"]>>) =>
@@ -552,6 +638,17 @@ export default function LaundrySettings() {
     },
     onError: (error: Error) =>
       setNotice(error.message || "Could not save the store profile."),
+  });
+  const saveQrSettings = useMutation({
+    mutationFn: () => apiPost<Settings>("/settings/store", { upiId: draftUpiId, qrOnPrint: form.qrOnPrint }),
+    onSuccess: (data) => {
+      queryClient.setQueryData<Settings>(["store-settings"], (current) => current ? { ...current, ...data } : data);
+      setForm((current) => ({ ...current, ...data }));
+      setQrPreview("");
+      setQrPreviewDraftKey("");
+      setNotice(isWebOnly ? "UPI / invoice QR settings saved in this browser for this branch." : "UPI / invoice QR settings updated.");
+    },
+    onError: (error: Error) => setNotice(error.message || "Could not update UPI / invoice QR settings."),
   });
   const setStaffEnabled = useMutation({
     mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
@@ -929,7 +1026,56 @@ export default function LaundrySettings() {
           {notice}
         </p>
       ) : null}
-      <nav aria-label="Settings areas" className="mt-5 rounded-[22px] border border-[#263f44]/10 bg-[#f5f2ff] p-3 shadow-[0_8px_28px_rgba(37,48,43,.03)]">
+      <section aria-labelledby="settings-directory-title" className="mt-5">
+        <div className="mb-3">
+          <p className="text-[10px] font-extrabold uppercase tracking-[.15em] text-[#767086]">Settings directory</p>
+          <h2 id="settings-directory-title" className="mt-1 font-serif text-xl text-[#17353c]">Choose what you want to manage</h2>
+          <p className="mt-1 text-xs text-[#718087]">Settings are grouped by task. Changes are made on the next screen and require an explicit Save or Update.</p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <section className="rounded-2xl border border-[#263f44]/10 bg-white p-4 shadow-[0_8px_28px_rgba(37,48,43,.03)]">
+            <div className="flex items-center gap-2"><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#eeeaff] text-[#664cf0]"><Building2 className="h-4 w-4" /></span><h3 className="text-sm font-extrabold text-[#241a45]">Store</h3></div>
+            <p className="mt-2 min-h-8 text-[11px] leading-4 text-[#718087]">Business details, payment QR, users and branches.</p>
+            <div className="mt-3 space-y-1">
+              <DirectoryTabLink label="Store profile & UPI QR" onClick={() => openSettingsArea("workspace-setup")} />
+              <Link to="/laundry/message-templates" className="flex min-h-9 items-center justify-between rounded-lg px-2 text-xs font-bold text-[#39786f] hover:bg-[#f4f8f5]">WhatsApp message templates<ChevronRight className="h-4 w-4" /></Link>
+              <Link to="/laundry/management" className="flex min-h-9 items-center justify-between rounded-lg px-2 text-xs font-bold text-[#39786f] hover:bg-[#f4f8f5]">Users & payroll<ChevronRight className="h-4 w-4" /></Link>
+            </div>
+          </section>
+          <section className="rounded-2xl border border-[#263f44]/10 bg-white p-4 shadow-[0_8px_28px_rgba(37,48,43,.03)]">
+            <div className="flex items-center gap-2"><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#fff2ce] text-[#855815]"><Tags className="h-4 w-4" /></span><h3 className="text-sm font-extrabold text-[#241a45]">Pricing</h3></div>
+            <p className="mt-2 min-h-8 text-[11px] leading-4 text-[#718087]">Garment rates, price rules and financial setup.</p>
+            <div className="mt-3 space-y-1">
+              <Link to="/laundry/catalogue?view=pricing" className="flex min-h-9 items-center justify-between rounded-lg px-2 text-xs font-bold text-[#39786f] hover:bg-[#f4f8f5]">Garment pricing<ChevronRight className="h-4 w-4" /></Link>
+              <Link to="/laundry/settings/charges" className="flex min-h-9 items-center justify-between rounded-lg px-2 text-xs font-bold text-[#39786f] hover:bg-[#f4f8f5]">Store Charges<ChevronRight className="h-4 w-4" /></Link>
+              <Link to="/laundry/settings/discounts" className="flex min-h-9 items-center justify-between rounded-lg px-2 text-xs font-bold text-[#39786f] hover:bg-[#f4f8f5]">Store Discounts<ChevronRight className="h-4 w-4" /></Link>
+            </div>
+          </section>
+          <section className="rounded-2xl border border-[#263f44]/10 bg-white p-4 shadow-[0_8px_28px_rgba(37,48,43,.03)]">
+            <div className="flex items-center gap-2"><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#eaf3ef] text-[#39786f]"><Boxes className="h-4 w-4" /></span><h3 className="text-sm font-extrabold text-[#241a45]">Catalog</h3></div>
+            <p className="mt-2 min-h-8 text-[11px] leading-4 text-[#718087]">Garments, services, categories and spreadsheet imports.</p>
+            <div className="mt-3 space-y-1">
+              <Link to="/laundry/catalogue?view=garments" className="flex min-h-9 items-center justify-between rounded-lg px-2 text-xs font-bold text-[#39786f] hover:bg-[#f4f8f5]">Garments<ChevronRight className="h-4 w-4" /></Link>
+              <Link to="/laundry/settings/categories" className="flex min-h-9 items-center justify-between rounded-lg px-2 text-xs font-bold text-[#39786f] hover:bg-[#f4f8f5]">Categories<ChevronRight className="h-4 w-4" /></Link>
+              <Link to="/laundry/settings/services" className="flex min-h-9 items-center justify-between rounded-lg px-2 text-xs font-bold text-[#39786f] hover:bg-[#f4f8f5]">Services<ChevronRight className="h-4 w-4" /></Link>
+              <Link to="/laundry/settings/service-units" className="flex min-h-9 items-center justify-between rounded-lg px-2 text-xs font-bold text-[#39786f] hover:bg-[#f4f8f5]">Service Units<ChevronRight className="h-4 w-4" /></Link>
+              <Link to="/laundry/import-catalogue" className="flex min-h-9 items-center justify-between rounded-lg px-2 text-xs font-bold text-[#39786f] hover:bg-[#f4f8f5]">Import catalog<ChevronRight className="h-4 w-4" /></Link>
+            </div>
+          </section>
+          <section className="rounded-2xl border border-[#263f44]/10 bg-white p-4 shadow-[0_8px_28px_rgba(37,48,43,.03)]">
+            <div className="flex items-center gap-2"><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#f5f2ff] text-[#664cf0]"><Warehouse className="h-4 w-4" /></span><h3 className="text-sm font-extrabold text-[#241a45]">Operations</h3></div>
+            <p className="mt-2 min-h-8 text-[11px] leading-4 text-[#718087]">Package setup, branch users, order numbers, capacity and printing.</p>
+            <div className="mt-3 space-y-1">
+              <Link to="/laundry/settings/store-users" className="flex min-h-9 items-center justify-between rounded-lg px-2 text-xs font-bold text-[#39786f] hover:bg-[#f4f8f5]">Store Users<ChevronRight className="h-4 w-4" /></Link>
+              <Link to="/laundry/settings/store-packages" className="flex min-h-9 items-center justify-between rounded-lg px-2 text-xs font-bold text-[#39786f] hover:bg-[#f4f8f5]">Store Packages<ChevronRight className="h-4 w-4" /></Link>
+              <DirectoryTabLink label="Capacity, zones & racks" onClick={() => openSettingsArea("operations-setup")} />
+              <DirectoryTabLink label="Tags & printers" onClick={() => openSettingsArea("printing-setup")} />
+              <Link to="/laundry/order-series" className="flex min-h-9 items-center justify-between rounded-lg px-2 text-xs font-bold text-[#39786f] hover:bg-[#f4f8f5]">Order No Series<ChevronRight className="h-4 w-4" /></Link>
+            </div>
+          </section>
+        </div>
+      </section>
+      <nav id="settings-areas" aria-label="Settings areas" className="mt-5 scroll-mt-4 rounded-[22px] border border-[#263f44]/10 bg-[#f5f2ff] p-3 shadow-[0_8px_28px_rgba(37,48,43,.03)]">
         <p className="px-1 pb-2 text-[10px] font-extrabold uppercase tracking-[.15em] text-[#767086]">Choose a settings workspace</p>
         <div className="flex flex-wrap gap-2" role="tablist" aria-label="Settings workspaces">
           {settingsAreas.map(({ id, label, detail, icon: Icon }) => (
@@ -974,7 +1120,7 @@ export default function LaundrySettings() {
             {checklistDone}/{checklist.length} complete
           </span>
         </div>
-        <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+        <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
           {checklist.map((item) => (
             <div
               key={item.label}
@@ -1016,11 +1162,11 @@ export default function LaundrySettings() {
           ))}
         </div>
       </section>
-      {activeArea === "workspace-setup" ? <div id="settings-panel-workspace-setup" role="tabpanel" aria-labelledby="settings-tab-workspace-setup" className="mt-6 grid gap-6 2xl:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="space-y-6">
+      {activeArea === "workspace-setup" ? <div id="settings-panel-workspace-setup" role="tabpanel" aria-labelledby="settings-tab-workspace-setup" className="mt-6 grid grid-cols-1 gap-6 2xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="min-w-0 space-y-6">
           <form
             id="business-profile"
-            onSubmit={submit}
+            onSubmit={(event) => { if (profileTab === "upi-qr") event.preventDefault(); else submit(event); }}
             className="rounded-[22px] border border-[#263f44]/10 bg-white p-6 shadow-[0_8px_28px_rgba(37,48,43,.04)]"
           >
             <div className="flex items-center gap-3">
@@ -1036,12 +1182,55 @@ export default function LaundrySettings() {
                 </p>
               </div>
             </div>
-            <div className="mt-6 grid gap-4 md:grid-cols-2">
+            <div role="tablist" aria-label="Store profile details" className="mt-5 flex flex-wrap gap-2 border-b border-[#263f44]/10 pb-3">
+              {([
+                ["store-details", "Store Details"],
+                ["address-details", "Address Details"],
+                ["upi-qr", "UPI / Invoice QR"],
+              ] as const).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  id={`store-profile-tab-${id}`}
+                  aria-selected={profileTab === id}
+                  aria-controls="store-profile-panel"
+                  onClick={() => setProfileTab(id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+                      event.preventDefault();
+                      const tabs = ["store-details", "address-details", "upi-qr"] as const;
+                      const currentIndex = tabs.indexOf(profileTab);
+                      const offset = event.key === "ArrowRight" ? 1 : -1;
+                      setProfileTab(tabs[(currentIndex + offset + tabs.length) % tabs.length]);
+                    }
+                    if (event.key === "Home") { event.preventDefault(); setProfileTab("store-details"); }
+                    if (event.key === "End") { event.preventDefault(); setProfileTab("upi-qr"); }
+                  }}
+                  className={`rounded-xl px-4 py-2 text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#664cf0] ${profileTab === id ? "bg-[#eeeaff] text-[#5740cb]" : "text-[#686479] hover:bg-[#f6f4ff]"}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {profileTab === "store-details" ? <div id="store-profile-panel" role="tabpanel" aria-labelledby="store-profile-tab-store-details" className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
               <Field
-                label="Business name"
+                label="Store name"
                 value={form.businessName}
                 onChange={(businessName) => setForm({ ...form, businessName })}
+                required
               />
+              <label className="text-sm font-semibold text-[#31484d]">
+                Current branch code
+                <input
+                  aria-label="Current branch code"
+                  readOnly
+                  value={currentBranch?.code || "Managed in Branches"}
+                  title="Branch identity is managed from the Branches workspace."
+                  className="mt-1.5 h-10 w-full rounded-xl border border-[#17363e]/15 bg-[#f5f7f3] px-3 text-sm font-normal text-[#65757a]"
+                />
+                <span className="mt-1 block text-[10px] font-normal text-[#718087]">Change branch codes in the Branches section so existing records keep their identity.</span>
+              </label>
               <Field
                 label="Phone"
                 value={form.phone}
@@ -1053,37 +1242,66 @@ export default function LaundrySettings() {
                 value={form.email}
                 onChange={(email) => setForm({ ...form, email })}
               />
-              <Field
-                label="UPI identifier"
-                value={form.upiId}
-                placeholder="store@bank"
-                onChange={(upiId) => setForm({ ...form, upiId })}
-              />
               <label className="text-sm font-semibold text-[#31484d]">
-                Tax mode
-                <select
-                  value={form.taxMode}
-                  onChange={(event) =>
-                    setForm({
-                      ...form,
-                      taxMode: event.target.value as Settings["taxMode"],
-                    })
-                  }
-                  className="mt-1.5 h-10 w-full rounded-xl border border-[#17363e]/15 bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#3a7d78]"
-                >
-                  <option value="none">No GST registration</option>
-                  <option value="gst">GST registered</option>
-                </select>
+                Description
+                <textarea
+                  aria-label="Store description"
+                  maxLength={500}
+                  value={form.description}
+                  onChange={(event) => setForm({ ...form, description: event.target.value })}
+                  className="mt-1.5 min-h-20 w-full rounded-xl border border-[#17363e]/15 px-3 py-2.5 text-sm font-normal outline-none focus:ring-2 focus:ring-[#3a7d78]"
+                />
+                <span className="mt-1 block text-right text-[10px] font-normal text-[#718087]">{form.description.length}/500</span>
               </label>
               <Field
-                label="GSTIN (required for GST mode)"
-                value={form.gstin}
-                disabled={form.taxMode !== "gst"}
-                placeholder="15-character GSTIN"
-                onChange={(gstin) =>
-                  setForm({ ...form, gstin: gstin.toUpperCase() })
-                }
+                label="Google Review Link"
+                type="url"
+                value={form.googleReviewUrl}
+                placeholder="https://…"
+                onChange={(googleReviewUrl) => setForm({ ...form, googleReviewUrl })}
               />
+              <div className="rounded-xl border border-[#17363e]/12 bg-[#f8f7fc] px-3 py-3">
+                <label className="flex cursor-pointer items-center gap-3 text-sm font-semibold text-[#31484d]">
+                  <input
+                    type="checkbox"
+                    aria-label="Allow tax"
+                    checked={form.taxMode !== "none"}
+                    onChange={(event) =>
+                      setForm({
+                        ...form,
+                        taxMode: event.target.checked ? "gst" : "none",
+                      })
+                    }
+                    className="h-4 w-4 accent-[#664cf0]"
+                  />
+                  Allow tax
+                </label>
+                <p className="ml-7 mt-1 text-xs font-normal text-[#718087]">
+                  Turn this off to hide the store tax number from this profile.
+                </p>
+              </div>
+              {form.taxMode !== "none" ? (
+                <>
+                  <Field
+                    label="Tax No"
+                    value={form.gstin}
+                    placeholder="Enter the store tax number"
+                    onChange={(gstin) =>
+                      setForm({ ...form, gstin: gstin.toUpperCase() })
+                    }
+                  />
+                  <label className="flex cursor-pointer items-center gap-3 self-start rounded-xl border border-[#17363e]/12 bg-[#f8f7fc] px-3 py-3 text-sm font-semibold text-[#31484d]">
+                    <input
+                      type="checkbox"
+                      aria-label="Tax Same As Company"
+                      checked={form.taxSameAsCompany}
+                      onChange={(event) => setForm({ ...form, taxSameAsCompany: event.target.checked })}
+                      className="h-4 w-4 accent-[#664cf0]"
+                    />
+                    Tax Same As Company
+                  </label>
+                </>
+              ) : null}
               <label className="text-sm font-semibold text-[#31484d]">
                 Currency
                 <input
@@ -1163,16 +1381,6 @@ export default function LaundrySettings() {
                   the operator must verify the physical output.
                 </span>
               </label>
-              <label className="md:col-span-2 text-sm font-semibold text-[#31484d]">
-                Address
-                <textarea
-                  value={form.address}
-                  onChange={(event) =>
-                    setForm({ ...form, address: event.target.value })
-                  }
-                  className="mt-1.5 min-h-24 w-full rounded-xl border border-[#17363e]/15 px-3 py-2.5 font-normal outline-none ring-[#3a7d78] focus:ring-2"
-                />
-              </label>
               <div className="md:col-span-2 rounded-xl border border-dashed border-[#17363e]/20 bg-[#f8f9f6] p-4">
                 <div className="flex items-center gap-4">
                   <span className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-xl border border-[#17363e]/10 bg-white text-[#39786f]">
@@ -1209,33 +1417,108 @@ export default function LaundrySettings() {
                   ) : null}
                 </div>
               </div>
-            </div>
-            <label className="mt-5 flex cursor-pointer items-center gap-3 rounded-xl bg-[#f5f7f3] p-4 text-sm">
-              <input
-                checked={form.qrOnPrint}
-                onChange={(event) =>
-                  setForm({ ...form, qrOnPrint: event.target.checked })
-                }
-                type="checkbox"
-                className="h-4 w-4 accent-[#3a7d78]"
+            </div> : profileTab === "address-details" ? <div id="store-profile-panel" role="tabpanel" aria-labelledby="store-profile-tab-address-details" className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+              <Field
+                label="Address 1"
+                value={form.addressLine1}
+                maxLength={200}
+                onChange={(value) => updateAddressPart("addressLine1", value)}
               />
-              <span>
-                <span className="block font-semibold">
-                  Show UPI QR on printed documents
-                </span>
-                <span className="text-xs text-[#718087]">
-                  The QR payload is generated from this store’s own UPI
-                  identifier.
-                </span>
-              </span>
-            </label>
-            <button
+              <Field
+                label="Address 2"
+                value={form.addressLine2}
+                maxLength={200}
+                onChange={(value) => updateAddressPart("addressLine2", value)}
+              />
+              <Field
+                label="City"
+                value={form.city}
+                maxLength={100}
+                onChange={(value) => updateAddressPart("city", value)}
+              />
+              <Field
+                label="State"
+                value={form.state}
+                maxLength={100}
+                onChange={(value) => updateAddressPart("state", value)}
+              />
+              <Field
+                label="Postal Code"
+                value={form.postalCode}
+                maxLength={24}
+                onChange={(value) => updateAddressPart("postalCode", value)}
+              />
+              <Field
+                label="Landmark"
+                value={form.landmark}
+                maxLength={120}
+                onChange={(value) => updateAddressPart("landmark", value)}
+              />
+              <label className="md:col-span-2 text-sm font-semibold text-[#31484d]">
+                Terms &amp; Conditions
+                <textarea
+                  aria-label="Terms and Conditions"
+                  maxLength={4000}
+                  value={form.termsAndConditions}
+                  onChange={(event) => setForm({ ...form, termsAndConditions: event.target.value })}
+                  className="mt-1.5 min-h-28 w-full rounded-xl border border-[#17363e]/15 px-3 py-2.5 text-sm font-normal outline-none focus:ring-2 focus:ring-[#3a7d78]"
+                />
+                <span className="mt-1 block text-right text-[10px] font-normal text-[#718087]">{form.termsAndConditions.length}/4,000 · Printed on customer receipts.</span>
+              </label>
+            </div> : <div id="store-profile-panel" role="tabpanel" aria-labelledby="store-profile-tab-upi-qr" className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_260px]">
+              <div className="space-y-5">
+                <div>
+                  <h3 className="text-sm font-extrabold text-[#241a45]">UPI / Invoice QR</h3>
+                  <p className="mt-1 max-w-2xl text-xs leading-5 text-[#718087]">Enter this branch’s UPI ID, generate a preview, then choose Update to use it on printed invoices.</p>
+                  {isWebOnly ? <p className="mt-3 rounded-xl border border-[#f0e1b4] bg-[#fffaf0] px-3 py-2 text-xs leading-5 text-[#74591d]">These settings stay in this browser for this branch and do not sync to other devices yet.</p> : null}
+                </div>
+                <label className="block text-sm font-semibold text-[#31484d]">
+                  UPI ID
+                  <input
+                    aria-label="UPI ID"
+                    autoComplete="off"
+                    value={form.upiId}
+                    onChange={(event) => { setForm({ ...form, upiId: event.target.value }); setQrError(""); }}
+                    placeholder="store@bank"
+                    className="mt-1.5 h-11 w-full rounded-xl border border-[#17363e]/15 bg-white px-3 text-sm font-normal outline-none focus:ring-2 focus:ring-[#664cf0]"
+                  />
+                  <span className="mt-1 block text-xs font-normal text-[#718087]">Use the UPI ID customers should pay. The QR is generated on this device.</span>
+                </label>
+                {draftUpiId && !validDraftUpi ? <p role="alert" className="rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">Enter a valid UPI ID with a name and payment handle separated by @.</p> : null}
+                <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-[#263f44]/10 bg-[#f8f7fc] p-4 text-sm font-semibold text-[#31484d]">
+                  <input
+                    type="checkbox"
+                    aria-label="Show UPI QR on printed documents"
+                    checked={form.qrOnPrint}
+                    onChange={(event) => setForm({ ...form, qrOnPrint: event.target.checked })}
+                    className="h-4 w-4 accent-[#664cf0]"
+                  />
+                  <span>
+                    <span className="block">Show UPI QR on printed documents</span>
+                    <span className="mt-0.5 block text-xs font-normal text-[#718087]">The invoice QR uses the UPI ID entered above.</span>
+                  </span>
+                </label>
+                {qrError ? <p role="alert" className="rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">{qrError}</p> : null}
+                {saveQrSettings.error ? <p role="alert" className="rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">{saveQrSettings.error instanceof Error ? saveQrSettings.error.message : "Could not update UPI / invoice QR settings."}</p> : null}
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" onClick={() => void generateQrPreview()} disabled={!validDraftUpi} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-[#ded9f7] bg-white px-4 py-2 text-sm font-bold text-[#5740cb] hover:bg-[#f8f7ff] disabled:cursor-not-allowed disabled:opacity-50"><QrCode className="h-4 w-4" />Generate QR</button>
+                  <button type="button" onClick={() => saveQrSettings.mutate()} disabled={!qrCanUpdate || saveQrSettings.isPending} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-[#664cf0] px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"><Save className="h-4 w-4" />{saveQrSettings.isPending ? "Updating…" : "Update"}</button>
+                  <span className="text-xs text-[#718087]">Make a valid change to enable Update.</span>
+                </div>
+              </div>
+              <aside className="rounded-2xl border border-[#263f44]/10 bg-[#fbfafc] p-4 text-center">
+                <p className="text-[10px] font-extrabold uppercase tracking-[.15em] text-[#664cf0]">Invoice QR preview</p>
+                {qrPreviewMatchesDraft ? <><img src={qrPreview} alt={`UPI QR for ${form.businessName || "Epic Laundry"}`} className="mx-auto mt-3 h-40 w-40 rounded-xl border border-[#17363e]/10 bg-white p-2" /><p className="mt-2 text-xs leading-5 text-[#617178]">{form.qrOnPrint ? "Ready to use on printed invoices after Update." : "Preview only. Turn on the print switch to include it on documents."}</p></> : <div className="mt-4 grid min-h-52 place-items-center rounded-xl border border-dashed border-[#dcd7e8] bg-white px-4 text-xs leading-5 text-[#718087]">{qrPreview ? "UPI or store details changed. Generate a fresh preview." : "Enter a valid UPI ID, then select Generate QR."}</div>}
+              </aside>
+            </div>}
+            {profileTab !== "upi-qr" ? <button
+              type="submit"
               disabled={save.isPending}
               className="mt-6 inline-flex items-center gap-2 rounded-xl bg-[#123039] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
             >
               <Save className="h-4 w-4" />
               {save.isPending ? "Saving…" : "Save store profile"}
-            </button>
+            </button> : null}
           </form>
           <section className="rounded-[22px] border border-[#263f44]/10 bg-white p-6 shadow-[0_8px_28px_rgba(37,48,43,.04)]">
             <div className="flex items-center gap-3">
@@ -1440,23 +1723,6 @@ export default function LaundrySettings() {
               {diagnostics.isLoading ? "Preparing…" : "Export diagnostics"}
             </button>
           </section>
-          {qrPreview ? (
-            <section className="rounded-[22px] border border-[#263f44]/10 bg-white p-5 text-center shadow-[0_8px_28px_rgba(37,48,43,.04)]">
-              <p className="text-[10px] font-bold uppercase tracking-[.15em] text-[#4d8982]">
-                UPI print preview
-              </p>
-              <img
-                src={qrPreview}
-                alt={`UPI QR for ${form.businessName || "Epic Laundry"}`}
-                className="mx-auto mt-3 h-40 w-40 rounded-xl border border-[#17363e]/10 p-2"
-              />
-              <p className="mt-2 text-xs text-[#617178]">
-                {form.qrOnPrint
-                  ? "Enabled for future printed invoices."
-                  : "Preview only — enable the print toggle to show it on documents."}
-              </p>
-            </section>
-          ) : null}
         </aside>
       </div> : null}
       {activeArea === "operations-setup" ? <div id="settings-panel-operations-setup" role="tabpanel" aria-labelledby="settings-tab-operations-setup" className="mt-6 space-y-6">
@@ -2750,7 +3016,7 @@ function ServiceZoneMaster() {
           {message}
         </p>
       ) : null}
-      <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+      <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
         {zones.isLoading ? (
           <p className="text-xs text-[#718087]">Loading zone master…</p>
         ) : zones.data?.length ? (
@@ -2900,7 +3166,7 @@ function RackProfileMaster() {
           {message}
         </p>
       ) : null}
-      <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+      <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
         {profiles.isLoading ? (
           <p className="text-xs text-[#718087]">Loading rack profiles…</p>
         ) : profiles.data?.length ? (
@@ -3085,7 +3351,7 @@ function HardwareStatusPanel() {
           Truthful boundary
         </span>
       </div>
-      <div className="mt-5 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+      <div className="mt-5 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
         {hardware.isLoading ? (
           <p className="text-xs text-[#718087]">Checking device boundaries…</p>
         ) : (
@@ -3144,7 +3410,7 @@ function StaffFields({
 }) {
   return (
     <>
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Field
           label="First name"
           value={draft.firstName}
@@ -3288,6 +3554,7 @@ function Field({
   disabled,
   minLength,
   autoComplete,
+  maxLength,
 }: {
   label: string;
   value: string;
@@ -3298,6 +3565,7 @@ function Field({
   disabled?: boolean;
   minLength?: number;
   autoComplete?: string;
+  maxLength?: number;
 }) {
   return (
     <label className="text-sm font-semibold text-[#31484d]">
@@ -3310,6 +3578,7 @@ function Field({
         disabled={disabled}
         minLength={minLength}
         autoComplete={autoComplete}
+        maxLength={maxLength}
         onChange={(event) => onChange(event.target.value)}
         className="mt-1.5 w-full rounded-xl border border-[#17363e]/15 px-3 py-2.5 font-normal outline-none ring-[#3a7d78] disabled:bg-[#f5f7f3] focus:ring-2"
       />

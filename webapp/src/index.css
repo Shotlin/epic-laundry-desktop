@@ -72,24 +72,24 @@
     --card-foreground: 213 30% 92%;
     --popover: 222 40% 11%;
     --popover-foreground: 213 30% 92%;
-    --primary: 217 91% 60%;
+    --primary: 251 84% 68%;
     --primary-foreground: 0 0% 100%;
     --secondary: 222 33% 16%;
     --secondary-foreground: 213 30% 92%;
     --muted: 222 33% 16%;
     --muted-foreground: 215 20% 60%;
-    --accent: 221 60% 20%;
-    --accent-foreground: 213 95% 85%;
+    --accent: 255 26% 23%;
+    --accent-foreground: 252 94% 88%;
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 98%;
     --border: 222 25% 20%;
     --input: 222 25% 20%;
-    --ring: 217 91% 60%;
-    --chart-1: 217 91% 60%;
-    --chart-2: 199 89% 55%;
-    --chart-3: 262 83% 68%;
-    --chart-4: 173 70% 50%;
-    --chart-5: 43 96% 60%;
+    --ring: 251 84% 68%;
+    --chart-1: 251 84% 68%;
+    --chart-2: 276 76% 72%;
+    --chart-3: 158 55% 58%;
+    --chart-4: 37 90% 65%;
+    --chart-5: 212 82% 70%;
     --success: #22C55E; --success-bg: rgba(34,197,94,0.14);
     --warning: #F59E0B; --warning-bg: rgba(245,158,11,0.14);
     --danger: #F87171; --danger-bg: rgba(239,68,68,0.14);
@@ -98,6 +98,21 @@
     --rail-foreground: 213 30% 88%;
     --rail-muted: 217 20% 50%;
     --rail-hover: 217 33% 16%;
+    --lndry-dark-canvas: #14121c;
+    --lndry-dark-paper: #201e2a;
+    --lndry-dark-raised: #292634;
+    --lndry-dark-rail: #191722;
+    --lndry-dark-foreground: #f1edf9;
+    --lndry-dark-copy: #d2cbdc;
+    --lndry-dark-muted: #b1a9bf;
+    --lndry-dark-line: #3a3546;
+    --lndry-dark-brand: #b8aaff;
+    --lndry-dark-brand-wash: #322a4d;
+    --lndry-dark-brand-mist: #39334b;
+    --lndry-dark-success: #a9dfc8;
+    --lndry-dark-success-wash: #21382f;
+    --lndry-dark-attention: #ffd48a;
+    --lndry-dark-attention-wash: #3d301c;
   }
 
   * { @apply border-border; }
@@ -142,7 +157,60 @@
    The native Electron print bridge already receives a self-contained document;
    this protects the booking dialog's direct window.print() fallback from printing
    the surrounding application shell. */
+.report-print-summary { display: none; }
 @media print {
+  @page reportLandscape { size: landscape; margin: 10mm; }
+  .report-print-page {
+    page: reportLandscape;
+    visibility: visible !important;
+    position: absolute !important;
+    inset: 0 auto auto 0 !important;
+    z-index: 99999 !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+    color: #111827 !important;
+    animation: none !important;
+  }
+  .report-print-page * { visibility: visible !important; box-shadow: none !important; }
+  .report-print-page .report-print-summary {
+    display: block !important;
+    margin-top: 5px !important;
+    color: #475569 !important;
+    font-size: 9pt !important;
+  }
+  .report-print-page .report-print-toolbar,
+  .report-print-page nav,
+  .report-print-page button,
+  .report-print-page input,
+  .report-print-page select,
+  .report-print-page .report-table-pagination { display: none !important; }
+  .report-print-page > div:first-child > div:first-child > a { display: none !important; }
+  .report-print-page .report-print-content { display: block !important; margin-top: 10px !important; }
+  .report-print-page .report-print-content > section { overflow: visible !important; border: 0 !important; }
+  .report-print-page .report-print-content > section > div:last-child { display: none !important; }
+  .report-print-page .report-print-content .overflow-x-auto { overflow: visible !important; }
+  .report-print-page .report-print-content table {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: auto !important;
+    border-collapse: collapse !important;
+    font-size: 8pt !important;
+  }
+  .report-print-page .report-print-content th,
+  .report-print-page .report-print-content td {
+    border: 1px solid #cbd5e1 !important;
+    padding: 4pt !important;
+    color: #111827 !important;
+    font-size: 8pt !important;
+    overflow-wrap: anywhere !important;
+  }
+  .report-print-page .report-print-content th { background: #f1f5f9 !important; print-color-adjust: exact; }
+  .report-print-page .report-print-content + section { display: none !important; }
+  .report-print-page section { break-inside: avoid; }
   body > * { visibility: hidden !important; }
   .fixed.inset-0 {
     visibility: visible !important;
@@ -210,4 +278,32 @@
   [class~="hover:border-[#84b7af]"]:hover { border-color: color-mix(in srgb, var(--lndry-brand) 60%, transparent) !important; }
   [class~="hover:text-[#174945]"]:hover, [class~="hover:text-[#17353c]"]:hover { color: var(--lndry-brand-strong) !important; }
   [class~="accent-[#2a8e84]"] { accent-color: var(--lndry-brand) !important; }
+}
+
+/* Dark operator theme: retain Epic Laundry's violet, evergreen and gold
+   accents while giving hard-coded legacy surfaces a coherent night palette. */
+@layer utilities {
+  .dark body { background-color: var(--lndry-dark-canvas); color: var(--lndry-dark-foreground); }
+  .dark [class~="bg-[#f3f1ec]"], .dark [class~="bg-[#f8f7f3]"], .dark [class~="bg-[#f8f7f3]/90"], .dark [class~="bg-[#fafaf7]"], .dark [class~="bg-[#fbfbf9]"], .dark [class~="bg-[#f5f5f1]"], .dark [class~="bg-[#f8f7fc]"], .dark [class~="bg-background"] { background-color: var(--lndry-dark-canvas) !important; }
+  .dark [class~="bg-white"], .dark [class~="bg-[#fffdf8]"], .dark [class~="bg-[#fffdf9]"], .dark [class~="bg-[#fcfcfa]"], .dark [class~="bg-[#fafbf9]"], .dark [class~="bg-[#fafbf8]"], .dark [class~="bg-card"], .dark [class~="bg-popover"] { background-color: var(--lndry-dark-paper) !important; }
+  .dark [class~="bg-[#fafaf7]"], .dark [class~="bg-[#fbfbf9]"], .dark [class~="bg-[#fbfbf8]"], .dark [class~="bg-[#fcfcfa]"], .dark [class~="bg-[#fafbf9]"], .dark [class~="bg-[#fafbf8]"], .dark [class~="bg-[#fbfcfa]"], .dark [class~="bg-[#f7f8f5]"], .dark [class~="bg-[#f7f8f4]"], .dark [class~="bg-[#f8fbf8]"], .dark [class~="bg-[#f4fbf8]"], .dark [class~="bg-[#f1f7f3]"], .dark [class~="bg-[#f3faf6]"], .dark [class~="bg-[#f4faf5]"], .dark [class~="bg-[#faf9ff]"], .dark [class~="bg-muted"] { background-color: var(--lndry-dark-raised) !important; }
+  .dark [class~="bg-[#123039]"], .dark [class~="bg-[#17353c]"], .dark [class~="bg-[#17363e]"], .dark [class~="bg-[#1b454e]"], .dark [class~="bg-[#1d4a53]"], .dark [class~="bg-[#0e272e]"] { background-color: var(--lndry-dark-rail) !important; }
+  .dark [class~="bg-[#eaf3ef]"], .dark [class~="bg-[#e7f3ef]"], .dark [class~="bg-[#f4f8f5]"], .dark [class~="bg-[#eff2ee]"], .dark [class~="bg-[#edf5f1]"], .dark [class~="bg-[#eef7f2]"], .dark [class~="bg-[#dcefe5]"], .dark [class~="bg-[#f1f8f4]"] { background-color: var(--lndry-dark-success-wash) !important; }
+  .dark [class~="bg-[#e8bf68]"], .dark [class~="bg-[#e6bc65]"] { background-color: var(--lndry-brand) !important; }
+  .dark [class~="bg-[#eeeaff]"], .dark [class~="bg-[#f6f4ff]"], .dark [class~="bg-[#f4f1ff]"], .dark [class~="bg-[#f0edff]"], .dark [class~="bg-[#e3ddff]"], .dark [class~="bg-[#e4ebe5]"], .dark [class~="bg-[#edf2ef]"], .dark [class~="bg-[#e6e5df]"], .dark [class~="bg-[#f5f5f8]"] { background-color: var(--lndry-dark-brand-wash) !important; }
+  .dark [class~="bg-[#fff2ce]"], .dark [class~="bg-[#fff3d8]"], .dark [class~="bg-[#fff4dc]"], .dark [class~="bg-[#fff8e8]"] { background-color: var(--lndry-dark-attention-wash) !important; }
+  .dark [class~="text-[#17353c]"], .dark [class~="text-[#17363e]"], .dark [class~="text-[#15333a]"], .dark [class~="text-[#18242b]"], .dark [class~="text-[#31484d]"], .dark [class~="text-[#223b40]"], .dark [class~="text-[#40565a]"], .dark [class~="text-[#24464a]"], .dark [class~="text-[#1d4e49]"], .dark [class~="text-foreground"], .dark [class~="text-card-foreground"] { color: var(--lndry-dark-foreground) !important; }
+  .dark [class~="text-[#39786f]"], .dark [class~="text-[#3a7d78]"], .dark [class~="text-[#2e6a60]"], .dark [class~="text-[#2e716d]"], .dark [class~="text-[#277267]"], .dark [class~="text-[#664cf0]"], .dark [class~="text-[#5138cf]"], .dark [class~="text-[#5d42e8]"], .dark [class~="text-[#3a2b8f]"], .dark [class~="text-[#6b5fb0]"], .dark [class~="text-[#3d316e]"], .dark [class~="text-[#205660]"], .dark [class~="text-[#225861]"], .dark [class~="text-[#241a45]"], .dark [class~="text-[#5843bd]"], .dark [class~="text-[#2d6b63]"], .dark [class~="text-[#52716c]"], .dark [class~="text-[#526e69]"], .dark [class~="text-[#205d55]"] { color: var(--lndry-dark-brand) !important; }
+  .dark [class~="text-[#4d8982]"], .dark [class~="text-[#315d57]"], .dark [class~="text-[#52676c]"], .dark [class~="text-[#526368]"], .dark [class~="text-[#415c5e]"], .dark [class~="text-[#617178]"], .dark [class~="text-[#617278]"], .dark [class~="text-[#52676b]"] { color: var(--lndry-dark-copy) !important; }
+  .dark [class~="text-[#718087]"], .dark [class~="text-[#74848a]"], .dark [class~="text-[#819095]"], .dark [class~="text-[#7b8b8d]"], .dark [class~="text-[#77878a]"], .dark [class~="text-[#91a09f]"], .dark [class~="text-[#7e8d90]"], .dark [class~="text-[#829092]"], .dark [class~="text-[#648077]"], .dark [class~="text-[#8a959a]"], .dark [class~="text-muted-foreground"] { color: var(--lndry-dark-muted) !important; }
+  .dark [class~="text-[#855815]"], .dark [class~="text-[#9a6518]"], .dark [class~="text-[#704f19]"], .dark [class~="text-[#8b7448]"] { color: var(--lndry-dark-attention) !important; }
+  .dark [class~="text-[#32695f]"], .dark [class~="text-[#2e6a60]"], .dark [class~="text-[#29635b]"], .dark [class~="text-[#52716c]"], .dark [class~="text-[#2d6b63]"] { color: var(--lndry-dark-success) !important; }
+  .dark [class~="text-[#a8c4bc]"], .dark [class~="text-[#b8d3c8]"], .dark [class~="text-[#bfd0c9]"], .dark [class~="text-[#e7f3ef]"], .dark [class~="text-[#a8ddd5]"], .dark [class~="text-[#b4ded8]"], .dark [class~="text-[#c7dfdc]"], .dark [class~="text-[#cbdedc]"] { color: #d7d1e2 !important; }
+  .dark [class~="border-[#263f44]/10"], .dark [class~="border-[#263f44]/8"], .dark [class~="border-[#263f44]/12"], .dark [class~="border-[#263f44]/15"], .dark [class~="border-border"] { border-color: var(--lndry-dark-line) !important; }
+  .dark [class~="border-[#39786f]"], .dark [class~="border-[#57978d]"], .dark [class~="border-[#39786f]/20"], .dark [class~="border-[#39786f]/25"], .dark [class~="border-[#39786f]/30"] { border-color: color-mix(in srgb, var(--lndry-dark-brand) 50%, transparent) !important; }
+  .dark input, .dark select, .dark textarea { color-scheme: dark; }
+  .dark input:not([type="checkbox"]):not([type="radio"]), .dark select, .dark textarea { background-color: var(--lndry-dark-raised); color: var(--lndry-dark-foreground); border-color: var(--lndry-dark-line); }
+  .dark button:disabled[class~="disabled:bg-[#a8b7b2]"] { background-color: #454151 !important; color: var(--lndry-dark-muted) !important; }
+  .dark input::placeholder, .dark textarea::placeholder { color: var(--lndry-dark-muted); opacity: 1; }
+  .dark [class~="hover:bg-[#e6e5df]"]:hover, .dark [class~="hover:bg-[#eeece6]"]:hover, .dark [class~="hover:bg-[#edf5f1]"]:hover, .dark [class~="hover:bg-[#edf4ef]"]:hover { background-color: var(--lndry-dark-brand-wash) !important; }
 }

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { ApiError, apiGet, apiPost, operatorErrorMessage } from '@/lib/api'
 import { cn, formatINR } from '@/lib/utils'
-import { canUseUi } from '@/components/laundry/LaundryShell'
+import { canUseUi } from '@/lib/permissions'
 import VisualEmptyState from '@/components/laundry/VisualEmptyState'
 
 type OnlineOrder = { id: string; externalOrderId: string; orderNumber: string; channel: string; state: string; sourceVersion: number; customer: Record<string, unknown>; pickup: Record<string, unknown>; request: Record<string, unknown>; paymentState: string; acceptanceDeadline?: string; preferences: string; notes: string; syncState: string; localOrderId?: string; updatedAt: string }
@@ -159,6 +159,14 @@ export default function LaundryOnlineOrders() {
   // against, and the controls say so rather than failing when pressed.
   // Declared early: the marketplace-detail auto-sync effect below needs it.
   const cloudReady = Boolean(cloud.data?.connected && cloud.data?.remoteVendorId)
+  useEffect(() => {
+    const requested = searchParams.get('filter')
+    if (states.some((item) => item.key === requested)) {
+      setFilter(requested as (typeof states)[number]['key'])
+      setCursor(undefined)
+      setLoadedItems([])
+    }
+  }, [searchParams])
   const cloudBlocker = cloud.isLoading || cloudReady ? undefined
     : !cloud.data?.configured ? 'This installation has no marketplace endpoint configured, so online decisions cannot reach the marketplace.'
       : !cloud.data.connected ? 'Connect this store to its marketplace account to accept or reject online orders.'

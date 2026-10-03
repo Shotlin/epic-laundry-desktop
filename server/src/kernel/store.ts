@@ -74,12 +74,23 @@ export type AuthSession = {
 export type StoreSettings = {
   businessName: string;
   address: string;
+  addressLine1: string;
+  addressLine2: string;
+  city: string;
+  state: string;
+  postalCode: string;
+  landmark: string;
+  description: string;
+  googleReviewUrl: string;
+  termsAndConditions: string;
   phone: string;
   email: string;
   upiId: string;
   qrOnPrint: boolean;
   logoDataUrl: string;
   taxMode: 'none' | 'gst';
+  /** Source profile preference; its invoice-identity effect remains unmapped. */
+  taxSameAsCompany: boolean;
   gstin: string;
   currency: string;
   timezone: string;
@@ -88,6 +99,20 @@ export type StoreSettings = {
   printerProfiles: PrinterProfileSettings[];
   tagTemplate: TagTemplateSettings;
   stationCapacities: Record<string, number>;
+  /** Branch-scoped customer message templates; writes are managed by the laundry settings API. */
+  messageTemplates: Array<{ key: string; body: string; active: boolean; updatedAt?: string }>;
+  /** Branch-scoped order-number series definitions; assignment to live numbering remains separately controlled. */
+  orderNoSeries: Array<{ id: string; name: string; prefix: string; createdAt: string }>;
+  /** Store Package definitions mirror the Settings master-data form. Their limits are not applied to Care Package redemption. */
+  storePackages: Array<{
+    id: string;
+    name: string;
+    amount: number;
+    services: Array<{ id: string; name: string }>;
+    limitsEnabled: boolean;
+    serviceLimits: Array<{ serviceId: string; quantityLimit: number; amountLimit: number }>;
+    createdAt: string;
+  }>;
   setupProgress: {
     business: boolean;
     owner: boolean;
@@ -374,6 +399,79 @@ function normalizeStationCapacities(value: unknown) {
     result[name] = capacity;
   }
   return result;
+}
+function normalizeOrderNoSeries(value: unknown): StoreSettings['orderNoSeries'] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error('Order number series must be a list');
+  const ids = new Set<string>();
+  const prefixes = new Set<string>();
+  return value.slice(0, 500).map((raw) => {
+    const input = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+    const id = String(input.id || '').trim().slice(0, 80);
+    const name = String(input.name || '').trim();
+    const prefix = String(input.prefix || '').trim();
+    if (!id || !name || !prefix) throw new Error('Series name and prefix are required');
+    if (name.length > 100) throw new Error('Series name must be 100 characters or fewer');
+    if (prefix.length > 20) throw new Error('Prefix must be 20 characters or fewer');
+    if (ids.has(id)) throw new Error('Order number series IDs must be unique');
+    const normalizedPrefix = prefix.toLocaleLowerCase('en');
+    if (prefixes.has(normalizedPrefix)) throw new Error('Each order number prefix must be unique');
+    ids.add(id);
+    prefixes.add(normalizedPrefix);
+    return { id, name, prefix, createdAt: String(input.createdAt || '').trim().slice(0, 40) || new Date().toISOString() };
+  });
+}
+function normalizeStorePackages(value: unknown): StoreSettings['storePackages'] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error('Store Packages must be a list');
+  if (value.length > 500) throw new Error('Store Packages cannot contain more than 500 records');
+  const ids = new Set<string>();
+  return value.map((raw) => {
+    const input = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+    const id = String(input.id || '').trim().slice(0, 80);
+    const name = String(input.name || '').trim();
+    if (!id || !name) throw new Error('Package name is required');
+    if (name.length > 100) throw new Error('Package name must be 100 characters or fewer');
+    if (ids.has(id)) throw new Error('Store Package IDs must be unique');
+    ids.add(id);
+    const amount = parseMoney(input.amount, 'Package Amount', { allowZero: true }) / 100;
+    if (!Array.isArray(input.services)) throw new Error('Package services must be a list');
+    const serviceIds = new Set<string>();
+    const services = input.services.map((rawService) => {
+      const service = rawService && typeof rawService === 'object' ? rawService as Record<string, unknown> : {};
+      const serviceId = String(service.id || '').trim().slice(0, 120);
+      const serviceName = String(service.name || '').trim().slice(0, 100);
+      if (!serviceId || !serviceName) throw new Error('Each package service needs an ID and name');
+      if (serviceIds.has(serviceId)) throw new Error('Package services must be unique');
+      serviceIds.add(serviceId);
+      return { id: serviceId, name: serviceName };
+    });
+    const limitsEnabled = Boolean(input.limitsEnabled);
+    if (input.serviceLimits != null && !Array.isArray(input.serviceLimits)) throw new Error('Service-wise limits must be a list');
+    const limitRows = (Array.isArray(input.serviceLimits) ? input.serviceLimits : []).map((rawLimit) => {
+      const limit = rawLimit && typeof rawLimit === 'object' ? rawLimit as Record<string, unknown> : {};
+      const serviceId = String(limit.serviceId || '').trim();
+      if (!limitsEnabled || !serviceIds.has(serviceId)) throw new Error('Service-wise limits must match selected package services');
+      const rawQuantityLimit = typeof limit.quantityLimit === 'number' && Number.isFinite(limit.quantityLimit) ? limit.quantityLimit.toString() : String(limit.quantityLimit ?? '').trim();
+      if (!/^(?:0|[1-9]\d*)(?:\.\d{1,3})?$/.test(rawQuantityLimit)) throw new Error('Quantity Limit must be a non-negative number with at most three decimal places');
+      const quantityLimit = Number(rawQuantityLimit);
+      if (!Number.isSafeInteger(Math.round(quantityLimit * 1000))) throw new Error('Quantity Limit is outside the supported range');
+      const amountLimit = parseMoney(limit.amountLimit, 'Amount Limit', { allowZero: true }) / 100;
+      return { serviceId, quantityLimit: Math.round(quantityLimit * 1000) / 1000, amountLimit };
+    });
+    if (limitsEnabled && limitRows.length !== services.length) throw new Error('Add a Quantity Limit and Amount Limit for every selected service');
+    if (!limitsEnabled && limitRows.length) throw new Error('Service-wise limits must be enabled before they can be saved');
+    const limitIds = new Set<string>();
+    for (const limit of limitRows) {
+      if (limitIds.has(limit.serviceId)) throw new Error('Each service can have only one limit group');
+      limitIds.add(limit.serviceId);
+    }
+    return {
+      id, name, amount, services, limitsEnabled,
+      serviceLimits: limitRows,
+      createdAt: String(input.createdAt || '').trim().slice(0, 40) || new Date().toISOString(),
+    };
+  });
 }
 function normalizeTagTemplate(value: unknown): TagTemplateSettings {
   const input = value && typeof value === 'object' ? value as Record<string, unknown> : {};
@@ -806,8 +904,18 @@ export class Store {
       const afterBooking = ['ask', 'open-print-centre', 'auto-print', 'none'].includes(String(saved.afterBooking)) ? saved.afterBooking : 'ask';
       return {
         ...saved,
+        addressLine1: String(saved.addressLine1 || saved.address || '').trim().slice(0, 200),
+        addressLine2: String(saved.addressLine2 || '').trim().slice(0, 200),
+        city: String(saved.city || '').trim().slice(0, 100),
+        state: String(saved.state || '').trim().slice(0, 100),
+        postalCode: String(saved.postalCode || '').trim().slice(0, 24),
+        landmark: String(saved.landmark || '').trim().slice(0, 120),
+        description: String(saved.description || '').trim().slice(0, 500),
+        googleReviewUrl: String(saved.googleReviewUrl || '').trim().slice(0, 2048),
+        termsAndConditions: String(saved.termsAndConditions || '').trim().slice(0, 4000),
         logoDataUrl: saved.logoDataUrl || '',
         taxMode: saved.taxMode === 'gst' ? 'gst' : 'none',
+        taxSameAsCompany: Boolean(saved.taxSameAsCompany),
         gstin: String(saved.gstin || '').trim().toUpperCase(),
         currency: /^[A-Z]{3}$/.test(currency) ? currency : 'INR',
         timezone,
@@ -816,6 +924,9 @@ export class Store {
         printerProfiles: normalizePrinterProfiles(saved.printerProfiles),
         tagTemplate: normalizeTagTemplate(saved.tagTemplate),
         stationCapacities: normalizeStationCapacities(saved.stationCapacities),
+        messageTemplates: Array.isArray(saved.messageTemplates) ? saved.messageTemplates : [],
+        orderNoSeries: normalizeOrderNoSeries(saved.orderNoSeries),
+        storePackages: normalizeStorePackages(saved.storePackages),
         setupProgress: {
           business: Boolean(saved.setupProgress?.business),
           owner: Boolean(saved.setupProgress?.owner),
@@ -827,15 +938,41 @@ export class Store {
         },
       };
     }
-    return { businessName: 'Epic Laundry', address: '', phone: '', email: '', upiId: '', qrOnPrint: false, logoDataUrl: '', taxMode: 'none', gstin: '', currency: 'INR', timezone: 'Asia/Kolkata', printerProfile: '', afterBooking: 'ask', printerProfiles: [], tagTemplate: { ...DEFAULT_TAG_TEMPLATE }, stationCapacities: { ...DEFAULT_STATION_CAPACITIES }, setupProgress: { business: false, owner: false, operations: false, catalogue: false, recovery: false, updatedAt: '', updatedBy: '' }, updatedAt: '', updatedBy: '' };
+    return { businessName: 'Epic Laundry', address: '', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', landmark: '', description: '', googleReviewUrl: '', termsAndConditions: '', phone: '', email: '', upiId: '', qrOnPrint: false, logoDataUrl: '', taxMode: 'none', taxSameAsCompany: false, gstin: '', currency: 'INR', timezone: 'Asia/Kolkata', printerProfile: '', afterBooking: 'ask', printerProfiles: [], tagTemplate: { ...DEFAULT_TAG_TEMPLATE }, stationCapacities: { ...DEFAULT_STATION_CAPACITIES }, messageTemplates: [], orderNoSeries: [], storePackages: [], setupProgress: { business: false, owner: false, operations: false, catalogue: false, recovery: false, updatedAt: '', updatedBy: '' }, updatedAt: '', updatedBy: '' };
   }
   saveStoreSettings(tenant: string, actor: string, input: Partial<StoreSettings>, storeId = this.currentStore(tenant)) {
     const previous = this.getStoreSettings(tenant, storeId);
+    const hasStructuredAddress = ['addressLine1', 'addressLine2', 'city', 'state', 'postalCode', 'landmark'].some((key) => Object.prototype.hasOwnProperty.call(input, key));
+    const addressLine1 = String(input.addressLine1 ?? (!hasStructuredAddress ? input.address ?? previous.addressLine1 : previous.addressLine1)).trim();
+    const addressLine2 = String(input.addressLine2 ?? previous.addressLine2).trim();
+    const city = String(input.city ?? previous.city).trim();
+    const state = String(input.state ?? previous.state).trim();
+    const postalCode = String(input.postalCode ?? previous.postalCode).trim();
+    const landmark = String(input.landmark ?? previous.landmark).trim();
+    const address = hasStructuredAddress
+      ? [addressLine1, addressLine2, [city, state, postalCode].filter(Boolean).join(', '), landmark].filter(Boolean).join(', ')
+      : String(input.address ?? previous.address).trim();
+    const description = String(input.description ?? previous.description).trim();
+    const googleReviewUrl = String(input.googleReviewUrl ?? previous.googleReviewUrl).trim();
+    const termsAndConditions = String(input.termsAndConditions ?? previous.termsAndConditions).trim();
+    for (const [label, value, limit] of [
+      ['Address Line 1', addressLine1, 200], ['Address Line 2', addressLine2, 200], ['City', city, 100],
+      ['State', state, 100], ['Postal Code', postalCode, 24], ['Landmark', landmark, 120],
+      ['Description', description, 500], ['Terms and Conditions', termsAndConditions, 4000], ['Google Review Link', googleReviewUrl, 2048],
+    ] as const) if (value.length > limit) throw new Error(`${label} must be ${limit} characters or fewer`);
+    if (googleReviewUrl) {
+      let parsed: URL;
+      try { parsed = new URL(googleReviewUrl); } catch { throw new Error('Google Review Link must be a valid web address'); }
+      if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Google Review Link must use http or https');
+    }
     const next: StoreSettings = {
-      businessName: String(input.businessName ?? previous.businessName).trim() || 'Epic Laundry', address: String(input.address ?? previous.address).trim(),
+      businessName: String(input.businessName ?? previous.businessName).trim() || 'Epic Laundry', address,
+      addressLine1: addressLine1.slice(0, 200), addressLine2: addressLine2.slice(0, 200), city: city.slice(0, 100), state: state.slice(0, 100), postalCode: postalCode.slice(0, 24), landmark: landmark.slice(0, 120),
+      description: description.slice(0, 500), googleReviewUrl, termsAndConditions,
       phone: String(input.phone ?? previous.phone).trim(), email: String(input.email ?? previous.email).trim(), upiId: String(input.upiId ?? previous.upiId).trim(),
       qrOnPrint: typeof input.qrOnPrint === 'boolean' ? input.qrOnPrint : previous.qrOnPrint,
       taxMode: input.taxMode === 'gst' ? 'gst' : input.taxMode === 'none' ? 'none' : previous.taxMode || 'none',
+      taxSameAsCompany: typeof input.taxSameAsCompany === 'boolean' ? input.taxSameAsCompany : previous.taxSameAsCompany,
       gstin: String(input.gstin ?? (previous.gstin || '')).trim().toUpperCase(),
       currency: /^[A-Z]{3}$/.test(String(input.currency ?? (previous.currency || 'INR')).trim().toUpperCase()) ? String(input.currency ?? (previous.currency || 'INR')).trim().toUpperCase() : 'INR',
       timezone: String(input.timezone ?? (previous.timezone || 'Asia/Kolkata')).trim() || 'Asia/Kolkata',
@@ -844,6 +981,9 @@ export class Store {
       printerProfiles: normalizePrinterProfiles(input.printerProfiles ?? previous.printerProfiles),
       tagTemplate: normalizeTagTemplate(input.tagTemplate ?? previous.tagTemplate),
       stationCapacities: normalizeStationCapacities(input.stationCapacities ?? previous.stationCapacities),
+      messageTemplates: Array.isArray(input.messageTemplates) ? input.messageTemplates : previous.messageTemplates,
+      orderNoSeries: normalizeOrderNoSeries(input.orderNoSeries ?? previous.orderNoSeries),
+      storePackages: normalizeStorePackages(input.storePackages ?? previous.storePackages),
       setupProgress: previous.setupProgress,
       updatedAt: new Date().toISOString(), updatedBy: actor,
       logoDataUrl: String(input.logoDataUrl ?? previous.logoDataUrl).trim(),
@@ -995,15 +1135,78 @@ export class Store {
   }
   getRow(tenant: string, id: string) { return this.readRows('SELECT * FROM entity_rows WHERE tenant = ? AND store_id = ? AND id = ?', [tenant, this.currentStore(tenant), id])[0]; }
   rowsOf(tenant: string, entity: string) { return this.readRows('SELECT * FROM entity_rows WHERE tenant = ? AND store_id = ? AND entity = ? ORDER BY created_at', [tenant, this.currentStore(tenant), entity]); }
-  listLaundryOrderPage(tenant: string, input: { search?: string; state?: string; from?: string; to?: string; page?: number; pageSize?: number; cursor?: string } = {}) {
+  listLaundryOrderPage(tenant: string, input: { search?: string; phone?: string; orderNo?: string; customer?: string; state?: string; status?: string; source?: string; reportedBy?: string; from?: string; to?: string; page?: number; pageSize?: number; cursor?: string } = {}) {
     const pageSize = Math.max(1, Math.min(200, Math.floor(Number(input.pageSize) || 50)));
     const page = Math.max(1, Math.floor(Number(input.page) || 1));
     const offset = (page - 1) * pageSize;
     const params: unknown[] = [tenant, this.currentStore(tenant)];
     const clauses = ["r.tenant = ?", "r.store_id = ?", "r.entity = 'laundry_order'"];
     if (input.state) { clauses.push("json_extract(r.data_json, '$.state') = ?"); params.push(input.state); }
+    if (input.status !== undefined && String(input.status).trim()) {
+      const supportedStates: Record<string, string> = {
+        booked: 'Booked',
+        'in-process': 'In Process',
+        done: 'Ready',
+        'pickup-received': 'Picked Up',
+        'out-for-delivery': 'Out for Delivery',
+        delivered: 'Delivered',
+        cancelled: 'Cancelled',
+      };
+      const statuses = [...new Set(String(input.status).split(',').map((value) => value.trim()).filter(Boolean))];
+      const supportedStatuses = new Set([...Object.keys(supportedStates), 'pickup-assigned', 'partially-delivered']);
+      if (!statuses.length || statuses.length > supportedStatuses.size || statuses.some((status) => !supportedStatuses.has(status))) {
+        clauses.push('1 = 0');
+      } else {
+        const statusClauses = statuses.map((status) => {
+          const state = supportedStates[status];
+          if (state) {
+            params.push(state);
+            return "json_extract(r.data_json, '$.state') = ?";
+          }
+          if (status === 'pickup-assigned') {
+            return "(json_extract(r.data_json, '$.state') = 'Booked' AND json_extract(r.data_json, '$.fulfillment_mode') = 'Pickup Order' AND COALESCE(json_extract(r.data_json, '$.pickup_rider'), '') <> '')";
+          }
+          if (status === 'partially-delivered') {
+            const deliveredQuantity = `(SELECT COALESCE(SUM(CAST(json_extract(e.data_json, '$.quantity') AS REAL)), 0)
+              FROM entity_rows e
+              WHERE e.tenant = r.tenant AND e.store_id = r.store_id
+                AND e.entity = 'laundry_fulfillment_event' AND e.status = 'Submitted'
+                AND json_extract(e.data_json, '$.order') = r.id
+                AND json_extract(e.data_json, '$.stage') = 'Delivered')`;
+            const orderedQuantity = `(SELECT COALESCE(SUM(CAST(json_extract(item.value, '$.qty') AS REAL)), 0)
+              FROM json_each(r.data_json, '$.items') AS item)`;
+            return `(${deliveredQuantity} > 0 AND ${deliveredQuantity} < ${orderedQuantity})`;
+          }
+          return '1 = 0';
+        });
+        clauses.push(`(${statusClauses.join(' OR ')})`);
+      }
+    }
+    if (input.source) { clauses.push("COALESCE(json_extract(r.data_json, '$.source'), '') = ?"); params.push(input.source); }
+    if (input.reportedBy) { clauses.push('r.created_by = ?'); params.push(input.reportedBy); }
     if (input.from) { clauses.push("json_extract(r.data_json, '$.order_date') >= ?"); params.push(input.from); }
     if (input.to) { clauses.push("json_extract(r.data_json, '$.order_date') <= ?"); params.push(input.to); }
+    const phone = String(input.phone || '').trim().toLowerCase().replace(/[\s()+-]/g, '');
+    if (phone) {
+      clauses.push(`EXISTS (SELECT 1 FROM entity_rows p
+        WHERE p.tenant = r.tenant AND p.store_id = r.store_id AND p.entity = 'party'
+          AND p.id = json_extract(r.data_json, '$.customer')
+          AND instr(replace(replace(replace(replace(replace(lower(COALESCE(json_extract(p.data_json, '$.phone'), '')), ' ', ''), '-', ''), '(', ''), ')', ''), '+', ''), ?) > 0)`);
+      params.push(phone);
+    }
+    const orderNo = String(input.orderNo || '').trim().toLowerCase();
+    if (orderNo) {
+      clauses.push("instr(lower(COALESCE(json_extract(r.data_json, '$.name'), '')), ?) > 0");
+      params.push(orderNo);
+    }
+    const customer = String(input.customer || '').trim().toLowerCase();
+    if (customer) {
+      clauses.push(`EXISTS (SELECT 1 FROM entity_rows p
+        WHERE p.tenant = r.tenant AND p.store_id = r.store_id AND p.entity = 'party'
+          AND p.id = json_extract(r.data_json, '$.customer')
+          AND instr(lower(COALESCE(json_extract(p.data_json, '$.name'), '')), ?) > 0)`);
+      params.push(customer);
+    }
     const search = String(input.search || '').trim().toLowerCase();
     if (search) {
       const ftsQuery = ftsSearchQuery(search);
@@ -1019,6 +1222,14 @@ export class Store {
     const total = Number((this.db.prepare(`SELECT COUNT(*) AS count FROM entity_rows r WHERE ${where}`).get(...countParams, ...(cursor ? [cursor.createdAt, cursor.createdAt, cursor.id] : []) ) as { count: number }).count);
     const rows = this.readRows(`SELECT r.* FROM entity_rows r WHERE ${where} ORDER BY r.created_at DESC, r.id DESC LIMIT ? OFFSET ?`, [...params, pageSize, offset]);
     return { rows, total, page, pageSize, nextCursor: rows.length === pageSize ? encodeLaundryOrderPageCursor(rows[rows.length - 1]) : undefined, hasMore: rows.length === pageSize };
+  }
+  listLaundryOrderFilterOptions(tenant: string) {
+    const params = [tenant, this.currentStore(tenant)];
+    const rows = this.db.prepare("SELECT DISTINCT COALESCE(json_extract(data_json, '$.source'), '') AS source, COALESCE(created_by, '') AS reported_by FROM entity_rows WHERE tenant = ? AND store_id = ? AND entity = 'laundry_order'").all(...params) as Array<{ source?: string; reported_by?: string }>;
+    return {
+      sources: [...new Set(rows.map((row) => String(row.source || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+      reporters: [...new Set(rows.map((row) => String(row.reported_by || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    };
   }
   searchLaundryCustomerRows(tenant: string, search: string, limit = 30) {
     const value = String(search || '').trim().toLowerCase();
@@ -1037,21 +1248,21 @@ export class Store {
     const byId = new Map([...rows, ...invoiceRows].map((row) => [row.id, row]));
     return [...byId.values()].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id)).slice(0, boundedLimit);
   }
-  private reportDateExpression(field: 'order_date' | 'posting_date' | 'expense_date' | 'created_at') { return field === 'created_at' ? 'created_at' : `json_extract(data_json, '$.${field}')`; }
-  rowsOfReportDate(tenant: string, entity: string, field: 'order_date' | 'posting_date' | 'expense_date' | 'created_at', from?: string, to?: string) {
+  private reportDateExpression(field: 'order_date' | 'posting_date' | 'expense_date' | 'created_at' | 'purchased_date') { return field === 'created_at' ? 'created_at' : field === 'purchased_date' ? "COALESCE(NULLIF(json_extract(data_json, '$.purchased_date'), ''), substr(created_at, 1, 10))" : `json_extract(data_json, '$.${field}')`; }
+  rowsOfReportDate(tenant: string, entity: string, field: 'order_date' | 'posting_date' | 'expense_date' | 'created_at' | 'purchased_date', from?: string, to?: string) {
     const expression = this.reportDateExpression(field); const params: unknown[] = [tenant, this.currentStore(tenant), entity]; const clauses = ['tenant = ?', 'store_id = ?', 'entity = ?'];
     if (from) { clauses.push(`${expression} >= ?`); params.push(from); }
     if (to) { clauses.push(`${expression} <= ?`); params.push(to); }
     return this.readRows(`SELECT * FROM entity_rows WHERE ${clauses.join(' AND ')} ORDER BY created_at`, params);
   }
-  *iterateRowsOfReportDate(tenant: string, entity: string, field: 'order_date' | 'posting_date' | 'expense_date' | 'created_at', from?: string, to?: string): IterableIterator<EntityRow> {
+  *iterateRowsOfReportDate(tenant: string, entity: string, field: 'order_date' | 'posting_date' | 'expense_date' | 'created_at' | 'purchased_date', from?: string, to?: string): IterableIterator<EntityRow> {
     const expression = this.reportDateExpression(field); const params: unknown[] = [tenant, this.currentStore(tenant), entity]; const clauses = ['tenant = ?', 'store_id = ?', 'entity = ?'];
     if (from) { clauses.push(`${expression} >= ?`); params.push(from); }
     if (to) { clauses.push(`${expression} <= ?`); params.push(to); }
     const rows = this.db.prepare(`SELECT * FROM entity_rows WHERE ${clauses.join(' AND ')} ORDER BY created_at`).iterate(...params) as IterableIterator<Record<string, unknown>>;
     for (const row of rows) yield this.decodeEntityRow(row);
   }
-  explainRowsOfReportDate(tenant: string, entity: string, field: 'order_date' | 'posting_date' | 'expense_date' | 'created_at', from?: string, to?: string) {
+  explainRowsOfReportDate(tenant: string, entity: string, field: 'order_date' | 'posting_date' | 'expense_date' | 'created_at' | 'purchased_date', from?: string, to?: string) {
     const expression = this.reportDateExpression(field); const params: unknown[] = [tenant, this.currentStore(tenant), entity]; const clauses = ['tenant = ?', 'store_id = ?', 'entity = ?'];
     if (from) { clauses.push(`${expression} >= ?`); params.push(from); }
     if (to) { clauses.push(`${expression} <= ?`); params.push(to); }
@@ -1557,6 +1768,58 @@ export class Store {
     if (!value) return undefined;
     const row = this.db.prepare('SELECT * FROM garment_units WHERE tenant = ? AND store_id = ? AND active_tag_code = ?').get(tenant, this.currentStore(tenant), value) as Record<string, unknown> | undefined;
     return row ? this.garmentUnitFromRow(row) : undefined;
+  }
+  listProductionTaskContexts(tenant: string) {
+    const storeId = this.currentStore(tenant);
+    const rows = this.db.prepare(`
+      SELECT t.id, t.created_at, t.updated_at,
+        COALESCE(json_extract(t.data_json, '$.garment_unit'), '') AS unit_id,
+        COALESCE(json_extract(t.data_json, '$.order'), u.order_id, '') AS order_id,
+        COALESCE(u.active_tag_code, '') AS tag_code,
+        COALESCE(NULLIF(json_extract(o.data_json, '$.name'), ''), u.order_id, '') AS order_number,
+        COALESCE(NULLIF(json_extract(g.data_json, '$.name'), ''), u.garment_id, '') AS garment,
+        COALESCE(json_extract(t.data_json, '$.station'), '') AS station,
+        COALESCE(json_extract(t.data_json, '$.kind'), '') AS kind,
+        COALESCE(json_extract(t.data_json, '$.status'), 'Open') AS status,
+        COALESCE(json_extract(t.data_json, '$.priority'), 'Normal') AS priority,
+        COALESCE(json_extract(t.data_json, '$.assigned_to'), '') AS assigned_to,
+        COALESCE(json_extract(t.data_json, '$.reason'), '') AS reason,
+        COALESCE(json_extract(t.data_json, '$.completion_note'), '') AS completion_note,
+        COALESCE(json_extract(t.data_json, '$.completed_at'), '') AS completed_at,
+        COALESCE(NULLIF(json_extract(o.data_json, '$.expected_delivery_date'), ''), json_extract(t.data_json, '$.due_date'), '') AS due_date
+      FROM entity_rows t
+      LEFT JOIN garment_units u
+        ON u.tenant = t.tenant AND u.store_id = t.store_id
+        AND u.id = json_extract(t.data_json, '$.garment_unit')
+      LEFT JOIN entity_rows o
+        ON o.tenant = t.tenant AND o.store_id = t.store_id
+        AND o.entity = 'laundry_order'
+        AND o.id = COALESCE(json_extract(t.data_json, '$.order'), u.order_id)
+      LEFT JOIN entity_rows g
+        ON g.tenant = t.tenant AND g.store_id = t.store_id
+        AND g.entity = 'laundry_garment' AND g.id = u.garment_id
+      WHERE t.tenant = ? AND t.store_id = ? AND t.entity = 'laundry_production_task'
+      ORDER BY t.created_at
+    `).all(tenant, storeId) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: String(row.id),
+      createdAt: String(row.created_at || ''),
+      updatedAt: String(row.updated_at || ''),
+      unitId: String(row.unit_id || ''),
+      orderId: String(row.order_id || ''),
+      tagCode: String(row.tag_code || ''),
+      orderNumber: String(row.order_number || ''),
+      garment: String(row.garment || ''),
+      station: String(row.station || ''),
+      kind: String(row.kind || ''),
+      status: String(row.status || 'Open'),
+      priority: String(row.priority || 'Normal'),
+      assignedTo: String(row.assigned_to || ''),
+      reason: String(row.reason || ''),
+      completionNote: String(row.completion_note || ''),
+      completedAt: String(row.completed_at || '') || null,
+      dueDate: String(row.due_date || ''),
+    }));
   }
   listGarmentUnits(tenant: string, filters: { orderId?: string; state?: string; search?: string } = {}) {
     const orderBy = filters.orderId ? 'item_index ASC, sequence ASC' : 'updated_at DESC, created_at DESC';

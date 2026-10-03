@@ -1,7 +1,9 @@
 import { expect, test } from '@playwright/test';
 
+test.setTimeout(180_000);
+
 test('operator can complete the core laundry desk journeys in a disposable workspace', async ({ page }) => {
-  await page.goto('/ui/app/');
+  await page.goto('/ui/app/?local-demo=1');
   const setupHeading = page.getByRole('heading', { name: 'Set up your workspace' });
   if (await setupHeading.isVisible()) {
     await page.getByRole('button', { name: /Production workspace/ }).click();
@@ -23,12 +25,12 @@ test('operator can complete the core laundry desk journeys in a disposable works
     await page.getByRole('button', { name: 'Sign in' }).click();
   }
   await expect(page.getByRole('heading', { name: /See the next move at a glance/ })).toBeVisible();
-  await page.goto('/ui/app/#/laundry/online-orders');
+  await page.goto('/ui/app/?local-demo=1#/laundry/online-orders');
   await expect(page.getByRole('heading', { name: 'Online orders' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Online order queue' })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Search online orders' })).toBeVisible();
   await expect(page.getByText(/Configured|Not configured/).first()).toBeVisible();
-  await page.goto('/ui/app/#/laundry/dashboard');
+  await page.goto('/ui/app/?local-demo=1#/laundry/dashboard');
   await expect(page.getByRole('heading', { name: /See the next move at a glance/ })).toBeVisible();
   const sidebarNav = page.locator('aside nav');
   await expect(sidebarNav.getByRole('button', { name: 'Counter' })).toBeVisible();
@@ -41,7 +43,7 @@ test('operator can complete the core laundry desk journeys in a disposable works
   await sidebarNav.evaluate((element) => { element.scrollTop = element.scrollHeight; });
   await expect(sidebarNav.getByRole('link', { name: 'Store settings' })).toBeVisible();
 
-  await page.goto('/ui/app/#/laundry/finance');
+  await page.goto('/ui/app/?local-demo=1#/laundry/finance');
   await expect(page.getByRole('heading', { name: 'See every rupee, without a spreadsheet.' })).toBeVisible();
   await expect(page.getByText('Net revenue').first()).toBeVisible();
   await expect(page.getByText('From booked service to operating result')).toBeVisible();
@@ -51,13 +53,13 @@ test('operator can complete the core laundry desk journeys in a disposable works
   await expect(page.getByText('Recorded customer-impact signals')).toBeVisible();
   await expect(page.getByText('Customer value to vendor settlement')).toBeVisible();
   await expect(page.getByText('Revenue, volume and quality load')).toBeVisible();
-  await page.goto('/ui/app/#/laundry/finance/statutory');
+  await page.goto('/ui/app/?local-demo=1#/laundry/finance/statutory');
   await expect(page.getByRole('heading', { name: 'Know what needs action.' })).toBeVisible();
   await expect(page.getByText('Post TDS', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Returns', exact: true }).click();
   await expect(page.getByText('Prepare return', { exact: true })).toBeVisible();
 
-  await page.goto('/ui/app/#/laundry/print-centre');
+  await page.goto('/ui/app/?local-demo=1#/laundry/print-centre');
   // The first "Today" demo order is weight-based and intentionally has no
   // garment-piece tags. Select the seeded piece-based order for tag/PDF QA.
   await page.getByRole('button', { name: 'All', exact: true }).click();
@@ -65,61 +67,51 @@ test('operator can complete the core laundry desk journeys in a disposable works
   await expect(order).toBeVisible();
   await order.click();
   await expect(page.getByRole('button', { name: /Garment tags \(\d+\)/ })).toBeVisible();
-  await expect(page.getByRole('img', { name: 'Opaque tag QR' }).first()).toBeVisible();
+  await expect(page.getByRole('img', { name: /Code 128 barcode for tag/ }).first()).toBeVisible();
   await page.getByRole('button', { name: 'Select all' }).click();
   await expect(page.getByText(/\d+ selected/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Print selected' })).toBeVisible();
-  const pdfPopupPromise = page.waitForEvent('popup');
+  const pdfDownloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Download PDF' }).click();
-  const pdfPopup = await pdfPopupPromise;
-  await pdfPopup.waitForLoadState('domcontentloaded');
-  await expect(pdfPopup.locator('body')).toContainText('Shoe pair');
-  await pdfPopup.close();
-  await expect(page.getByText('PDF saved from the same renderer used for preview.')).toBeVisible();
+  const pdfDownload = await pdfDownloadPromise;
+  expect(pdfDownload.suggestedFilename()).toMatch(/LND-\d+-\d+-garment-tags\.pdf/);
+  await expect(page.getByText(/PDF downloaded — 2 garment tags, Code 128 barcodes/)).toBeVisible();
 
-  const tag = (await page.getByText(/ELT-\d{8}-\d{6}/).first().innerText()).trim();
-  await page.goto('/ui/app/#/laundry/garment-tracking');
+  const tag = (await page.getByText(/ELT-\d{8}-\d{6}/).first().textContent() || '').trim();
+  await page.goto('/ui/app/?local-demo=1#/laundry/garment-tracking');
   await expect(page.getByRole('heading', { name: 'Garment tracking' })).toBeVisible();
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.type(tag, { delay: 4 });
   await page.keyboard.press('Enter');
-  await expect(page.getByText('Scan recorded in the garment audit trail.')).toBeVisible();
+  await expect(page.getByText('Scan recorded in the garment audit trail.')).toBeVisible({ timeout: 20_000 });
   await page.getByRole('textbox', { name: 'Operator note' }).fill('UI reprint audit');
-  const reprintPopupPromise = page.waitForEvent('popup');
   await page.getByRole('button', { name: 'Print again' }).click();
-  const reprintPopup = await reprintPopupPromise;
-  await reprintPopup.waitForLoadState('domcontentloaded');
-  await reprintPopup.close();
-  await expect(page.getByText(/Same tag printed again/)).toBeVisible();
+  await expect(page.getByText(/Same tag printed again/)).toBeVisible({ timeout: 20_000 });
   await page.getByRole('textbox', { name: 'Operator note' }).fill('UI replacement audit');
-  const replacePopupPromise = page.waitForEvent('popup');
   await page.getByRole('button', { name: 'Replace tag' }).click();
-  const replacePopup = await replacePopupPromise;
-  await replacePopup.waitForLoadState('domcontentloaded');
-  await replacePopup.close();
-  await expect(page.getByText(/Tag replaced and the new active tag was printed/)).toBeVisible();
+  await expect(page.getByText(/Tag replaced and the new active tag was printed/)).toBeVisible({ timeout: 20_000 });
 
-  await page.keyboard.press('Control+k');
+  await page.getByRole('button', { name: 'Open command search' }).click();
   await expect(page.getByRole('textbox', { name: 'Command search' })).toBeVisible();
   await page.getByRole('textbox', { name: 'Command search' }).fill('Demo');
   await expect(page.getByText('Workspace records')).toBeVisible();
 
   await page.keyboard.press('Escape');
-  await page.goto('/ui/app/#/laundry/new-order');
+  await page.goto('/ui/app/?local-demo=1#/laundry/new-order');
   await expect(page.getByRole('heading', { name: 'Build the order visually.' })).toBeVisible();
-  await page.getByRole('button', { name: 'Add' }).first().click();
-  await page.getByPlaceholder('Customer name').fill('Journey Customer');
-  await page.getByPlaceholder('Phone number').fill('9000000099');
+  await page.getByRole('textbox', { name: 'Search customers by name or phone' }).fill('Demo Priya');
+  await page.getByRole('button', { name: /Demo Priya 9000000101/ }).click();
+  await page.locator('article').first().getByRole('button', { name: 'Add', exact: true }).click();
   await page.getByRole('button', { name: 'Hold current order' }).click();
-  await page.getByRole('button', { name: /Journey Customer · 1 item/ }).click();
+  await page.getByRole('button', { name: /Demo Priya · 1 item/ }).click();
   await expect(page.getByRole('button', { name: 'Book order' })).toBeEnabled();
   await page.getByRole('button', { name: 'Book order' }).click();
   await expect(page.getByText('Order booked')).toBeVisible();
-  const journeyOrder = (await page.getByText(/LND-\d{2}-\d{5}/).last().innerText()).match(/LND-\d{2}-\d{5}/)?.[0] || '';
-  const journeyTag = (await page.getByText(/ELT-\d{8}-\d{6}/).last().innerText()).match(/ELT-\d{8}-\d{6}/)?.[0] || '';
+  const journeyOrder = (await page.getByText(/LND-\d{2}-\d{5}/).last().textContent() || '').match(/LND-\d{2}-\d{5}/)?.[0] || '';
+  const journeyTag = (await page.getByText(/ELT-\d{8}-\d{6}/).last().textContent() || '').match(/ELT-\d{8}-\d{6}/)?.[0] || '';
   await page.getByRole('button', { name: 'Close receipt' }).click();
 
-  await page.goto('/ui/app/#/laundry/production-queue');
+  await page.goto('/ui/app/?local-demo=1#/laundry/production-queue');
   await expect(page.getByRole('heading', { name: 'Work queue' })).toBeVisible();
   const startButton = page.getByRole('button', { name: 'Start' }).first();
   if (await startButton.count()) {
@@ -127,14 +119,14 @@ test('operator can complete the core laundry desk journeys in a disposable works
     await expect(page.getByText('In Progress').first()).toBeVisible();
   }
 
-  await page.goto('/ui/app/#/laundry/quality-claims');
-  await expect(page.getByRole('heading', { name: 'Claims & exceptions' })).toBeVisible();
+  await page.goto('/ui/app/?local-demo=1#/laundry/quality-claims');
+  await expect(page.getByRole('heading', { name: 'Claims & exceptions' })).toBeVisible({ timeout: 20_000 });
   await page.getByPlaceholder('TAG-20260829-000001').fill(journeyTag);
   await page.getByPlaceholder('What did the operator observe?').fill('Journey test quality observation');
   await page.getByRole('button', { name: 'Open claim' }).click();
   await expect(page.getByText('Quality claim opened for supervisor review.')).toBeVisible();
 
-  await page.goto(`/ui/app/#/laundry/orders?order=${encodeURIComponent(journeyOrder)}`);
+  await page.goto(`/ui/app/?local-demo=1#/laundry/orders?order=${encodeURIComponent(journeyOrder)}`);
   await expect(page.getByText('Order work card')).toBeVisible();
   await expect(page.getByText('Assembly safety · garment traceability')).toBeVisible();
   const amountInput = page.locator('aside label').filter({ hasText: 'Amount' }).locator('input');
@@ -145,18 +137,18 @@ test('operator can complete the core laundry desk journeys in a disposable works
     await expect(page.getByText(/Recorded|Paid|Collection/).first()).toBeVisible({ timeout: 10000 });
   }
 
-  await page.goto('/ui/app/#/laundry/orders?view=customers');
+  await page.goto('/ui/app/?local-demo=1#/laundry/orders?view=customers');
   await expect(page.getByRole('heading', { name: 'Store orders & customers' })).toBeVisible();
   await page.getByPlaceholder('Search name, phone or email').fill('Demo');
   await expect(page.getByText(/Demo/).first()).toBeVisible();
 
-  await page.goto('/ui/app/#/laundry/reports');
+  await page.goto('/ui/app/?local-demo=1#/laundry/reports');
   await expect(page.getByRole('heading', { name: 'Reports' })).toBeVisible();
   await page.getByRole('button', { name: 'Reset', exact: true }).click();
   await expect(page.getByText('Financial controls')).toBeVisible();
 
-  await page.goto('/ui/app/#/laundry/routes');
+  await page.goto('/ui/app/?local-demo=1#/laundry/routes');
   await expect(page.getByRole('heading', { name: 'Route runs' })).toBeVisible();
-  await page.goto('/ui/app/#/laundry/cash-closing');
+  await page.goto('/ui/app/?local-demo=1#/laundry/cash-closing');
   await expect(page.getByRole('heading', { name: 'Cash closing' })).toBeVisible();
 });

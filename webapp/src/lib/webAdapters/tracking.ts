@@ -225,7 +225,7 @@ route('POST', '/laundry/returns', async ({ get, post, body }) => {
   const known = ['QUALITY_ISSUE', 'SERVICE_NOT_PERFORMED', 'DUPLICATE_CHARGE', 'CUSTOMER_CANCELLATION']
   const reason = known.includes(wire(body.reason)) ? wire(body.reason) : 'OTHER'
   const result = await post('/vendor/return-cases', { orderId, amountPaise: toPaise(body.amount), reason, note: body.note })
-  return result.returnCase ?? result
+  return { duplicate: Boolean(result.duplicate), returnCase: result.returnCase ?? result }
 })
 
 // ── Print history ─────────────────────────────────────────────────────────

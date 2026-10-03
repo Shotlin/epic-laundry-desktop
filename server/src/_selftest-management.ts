@@ -44,6 +44,7 @@ try {
   const request = requestLaundryReturn(tenant, actor, { orderId: booking.order.id, amount: 1, reason: 'Quality issue', note: 'Counter evidence' });
   assert.equal(request.returnCase.data.status, 'Requested', 'return request does not fabricate a completed refund');
   assert.equal(requestLaundryReturn(tenant, actor, { orderId: booking.order.id, amount: 1, reason: 'Quality issue' }).duplicate, true, 'same return retry does not duplicate a case');
+  assert.throws(() => requestLaundryReturn(tenant, actor, { orderId: booking.order.id, amount: 1.001, reason: 'Other' }), /PRECISION/, 'return requests keep paise to two decimal places');
   assert.throws(() => requestLaundryReturn(tenant, actor, { orderId: booking.order.id, amount: booking.order.grandTotal + 1, reason: 'Quality issue' }), /EXCEEDS/, 'return request cannot exceed the original order value');
   assert.equal(listLaundryReturns(tenant).length, 1, 'return case is durable and queryable');
   const financeWithReturn = financeCommandCenter(tenant, { from: runDate, to: runDate });

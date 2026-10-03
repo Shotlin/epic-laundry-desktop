@@ -3,7 +3,7 @@ import { AlertTriangle, ArrowRight, BadgeCheck, Ban, Building2, Check, ChevronRi
 import { useEffect, useMemo, useState } from 'react'
 import { apiGet, apiPost, apiPut, operatorErrorMessage } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { canUseUi } from '@/components/laundry/LaundryShell'
+import { canUseUi } from '@/lib/permissions'
 import { useDialogFocusLifecycle } from '@/components/laundry/useDialogFocus'
 import VisualEmptyState from '@/components/laundry/VisualEmptyState'
 import VisualLoadingState from '@/components/laundry/VisualLoadingState'

@@ -151,8 +151,17 @@ export async function refreshStoredSession(): Promise<StoredSession | null> {
   }
 }
 
-/** True when running as a plain website (no Electron `window.epic` bridge) — the single source of truth every component branches on, so the Electron build's own code paths are never touched. */
-export const isWebOnly = typeof window !== 'undefined' && !window.epic
+/**
+ * A local demo can be reviewed in a browser without the Electron bridge when
+ * the reviewer explicitly asks for it in the URL. It remains restricted to a
+ * loopback origin; ordinary web deployments always use cloud authentication.
+ */
+export const isLocalDemoBrowser = typeof window !== 'undefined' && !window.epic
+  && ['127.0.0.1', 'localhost', '::1'].includes(window.location.hostname)
+  && new URLSearchParams(window.location.search).get('local-demo') === '1'
+
+/** True when running as a plain website (no Electron bridge and no explicit local demo review). */
+export const isWebOnly = typeof window !== 'undefined' && !window.epic && !isLocalDemoBrowser
 
 /**
  * Builds the shell's expected `{user:{username,roles,storeId}}` session

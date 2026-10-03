@@ -59,6 +59,9 @@ export type PrintOrder = {
 export type PrintSettings = {
   businessName?: string;
   address?: string;
+  description?: string;
+  googleReviewUrl?: string;
+  termsAndConditions?: string;
   phone?: string;
   email?: string;
   logoDataUrl?: string;
@@ -116,6 +119,15 @@ const escapeHtml = (value: unknown) =>
       ] || char,
   );
 
+function safeHttpUrl(value: unknown) {
+  try {
+    const url = new URL(String(value || '').trim());
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
 async function imageDataUrl(source: string) {
   if (source.startsWith("data:image/")) return source;
   try {
@@ -152,9 +164,15 @@ export async function buildLaundryPrintHtml(
     .filter(Boolean)
     .map(escapeHtml)
     .join(" · ");
-  const header = `<header>${logoMarkup}<div>${settings?.tagTemplate?.showStoreName !== false ? `<strong>${escapeHtml(businessName)}</strong>` : ""}<small>Local laundry operating desk</small>${contact ? `<small>${contact}</small>` : ""}</div></header>`;
+  const description = settings?.description?.trim();
+  const header = `<header>${logoMarkup}<div>${settings?.tagTemplate?.showStoreName !== false ? `<strong>${escapeHtml(businessName)}</strong>` : ""}${description ? `<small>${escapeHtml(description)}</small>` : `<small>Local laundry operating desk</small>`}${contact ? `<small>${contact}</small>` : ""}</div></header>`;
   if (kind === "receipt") {
-    const body = `${header}<div class="eyebrow">Customer receipt</div><h1>${escapeHtml(order.invoiceNumber || order.orderNumber)}</h1><p class="muted">${escapeHtml(order.customer.name)}${order.customer.phone ? ` · ${escapeHtml(order.customer.phone)}` : ""} · Due ${escapeHtml(order.expectedDeliveryDate)}</p><div class="line-items">${order.receipt.items.map((item) => `<div><span>${escapeHtml(item.garmentName)} <small>${escapeHtml(item.serviceName)} · ${item.qty}</small></span><strong>${formatMoney(item.amount)}</strong></div>`).join("")}</div><div class="totals">${summaryRows({ subtotal: order.receipt.subtotal, charges: order.receipt.charges, discounts: order.receipt.discounts, taxAmount: order.receipt.taxAmount, taxRate: order.receipt.taxRate, breakdown: order.receipt.breakdown }).map((row) => `<div><span>${escapeHtml(row.label)}</span><span>${row.kind === "discount" ? "−" : ""}${formatMoney(row.amount)}</span></div>`).join("")}<div class="grand"><span>Grand total</span><strong>${formatMoney(order.receipt.grandTotal)}</strong></div></div><p class="muted">${escapeHtml(order.receipt.paymentStatus || "")} · ${escapeHtml(order.receipt.paymentMode || "")}</p>`;
+    const terms = settings?.termsAndConditions?.trim()
+      ? `<section style="margin-top:8mm;border-top:1px solid #d8e2dd;padding-top:4mm"><h2 style="font-size:11px;margin:0 0 2mm">Terms &amp; Conditions</h2><p style="color:#52676b;font-size:9px;line-height:1.5;margin:0">${escapeHtml(settings.termsAndConditions).replace(/\r?\n/g, "<br>")}</p></section>`
+      : "";
+    const reviewUrl = safeHttpUrl(settings?.googleReviewUrl);
+    const review = reviewUrl ? `<p style="margin-top:5mm;font-size:10px"><a href="${escapeHtml(reviewUrl)}">Share your feedback</a></p>` : "";
+    const body = `${header}<div class="eyebrow">Customer receipt</div><h1>${escapeHtml(order.invoiceNumber || order.orderNumber)}</h1><p class="muted">${escapeHtml(order.customer.name)}${order.customer.phone ? ` · ${escapeHtml(order.customer.phone)}` : ""} · Due ${escapeHtml(order.expectedDeliveryDate)}</p><div class="line-items">${order.receipt.items.map((item) => `<div><span>${escapeHtml(item.garmentName)} <small>${escapeHtml(item.serviceName)} · ${item.qty}</small></span><strong>${formatMoney(item.amount)}</strong></div>`).join("")}</div><div class="totals">${summaryRows({ subtotal: order.receipt.subtotal, charges: order.receipt.charges, discounts: order.receipt.discounts, taxAmount: order.receipt.taxAmount, taxRate: order.receipt.taxRate, breakdown: order.receipt.breakdown }).map((row) => `<div><span>${escapeHtml(row.label)}</span><span>${row.kind === "discount" ? "−" : ""}${formatMoney(row.amount)}</span></div>`).join("")}<div class="grand"><span>Grand total</span><strong>${formatMoney(order.receipt.grandTotal)}</strong></div></div><p class="muted">${escapeHtml(order.receipt.paymentStatus || "")} · ${escapeHtml(order.receipt.paymentMode || "")}</p>${review}${terms}`;
     return documentHtml("Customer receipt", body, "receipt-page");
   }
   const tags = requestedTags || [];

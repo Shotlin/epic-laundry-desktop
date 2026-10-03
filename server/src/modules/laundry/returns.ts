@@ -5,17 +5,39 @@ import { audit } from '../../kernel/audit.js';
 const reasons = new Set(['Quality issue', 'Service not performed', 'Duplicate charge', 'Customer cancellation', 'Other']);
 
 export function listLaundryReturns(tenant: string) {
-  return store.rowsOf(tenant, 'laundry_return_case').filter((row) => row.status !== 'Cancelled').map((row) => ({ id: row.id, status: String(row.data.status || 'Requested'), orderId: String(row.data.order || ''), customerId: String(row.data.customer || ''), amount: Number(row.data.amount || 0), reason: String(row.data.reason || ''), note: String(row.data.note || ''), createdAt: row.created_at, decisionNote: String(row.data.decision_note || '') })).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return store.rowsOf(tenant, 'laundry_return_case').filter((row) => row.status !== 'Cancelled').map((row) => {
+    const orderId = String(row.data.order || '');
+    const customerId = String(row.data.customer || '');
+    const order = store.getRow(tenant, orderId);
+    const customer = store.getRow(tenant, customerId);
+    return {
+      id: row.id,
+      status: String(row.data.status || 'Requested'),
+      orderId,
+      orderNumber: String(order?.data.name || orderId),
+      customerId,
+      customerName: String(customer?.data.name || 'Customer unavailable'),
+      amount: Number(row.data.amount || 0),
+      reason: String(row.data.reason || ''),
+      note: String(row.data.note || ''),
+      createdAt: row.created_at,
+      decisionNote: String(row.data.decision_note || ''),
+    }
+  }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export function requestLaundryReturn(tenant: string, actor: string, input: Record<string, unknown>) {
   const orderId = String(input.orderId || '').trim();
   const order = store.getRow(tenant, orderId);
   const reason = String(input.reason || '').trim();
-  const amount = Number(input.amount || 0);
+  const requestedAmount = Number(input.amount || 0);
   if (!order || order.entity !== 'laundry_order') throw new Error('RETURN_ORDER_NOT_FOUND');
   if (!reasons.has(reason)) throw new Error('RETURN_REASON_INVALID');
-  if (!Number.isFinite(amount) || amount <= 0) throw new Error('RETURN_AMOUNT_INVALID');
+  if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) throw new Error('RETURN_AMOUNT_INVALID');
+  const requestedPaise = requestedAmount * 100;
+  const amountPaise = Math.round(requestedPaise);
+  if (Math.abs(requestedPaise - amountPaise) > 0.000001) throw new Error('RETURN_AMOUNT_PRECISION_INVALID');
+  const amount = amountPaise / 100;
   const max = Number(order.data.grand_total || 0);
   if (amount > max) throw new Error('RETURN_EXCEEDS_ORDER_TOTAL');
   const duplicate = store.rowsOf(tenant, 'laundry_return_case').find((row) => row.data.order === orderId && row.data.amount === amount && row.data.reason === reason && row.data.status === 'Requested');

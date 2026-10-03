@@ -37,6 +37,8 @@ const notifyUnauthorizedUnlessCloud = (body: unknown) => {
 export type OfflineQueueItem = {
   id: string;
   entity: 'laundry_order' | 'laundry_expense' | 'party';
+  /** The local workspace route used to create the command; absent on older queue records. */
+  path?: string;
   data: Record<string, unknown>;
   idempotencyKey: string;
   createdAt: string;
@@ -72,6 +74,9 @@ const operatorMessages: Record<string, string> = {
   RIDER_ONLY_ACCOUNT: 'This phone is registered as a Captain (delivery) account. Captains cannot access the store desktop app.',
   AMBIGUOUS_VENDOR_ACCOUNT: 'This phone is not recognized as a vendor account for any shop. Contact support if you believe this is wrong.',
   CLOUD_LOGIN_INPUT_REQUIRED: 'Enter your phone number and the one-time code.',
+  CLOUD_NOT_CONNECTED: 'The LNDRY vendor account is not connected. Ask the store owner to connect it; you can continue without wallet or app sync.',
+  CLOUD_VENDOR_NOT_LINKED: 'The LNDRY account is connected but is not linked to a shop. Ask the store owner to finish setup.',
+  CLOUD_NOT_CONFIGURED: 'LNDRY connection is not configured yet. Ask the store owner to finish setup.',
 };
 
 export function operatorErrorMessage(error: unknown, fallback: string) {
@@ -104,24 +109,57 @@ function isNetworkFailure(error: unknown) {
 
 export async function apiPostOffline<T = any>(path: string, body: Record<string, unknown>, entity: OfflineQueueItem['entity']): Promise<T> {
   const idempotencyKey = randomId();
-  try { return await apiPost<T>(path, body, { idempotencyKey }); }
+  // Preserve this command key through the web adapters as well as in storage.
+  // If the backend committed but its response was lost, retrying the key is safe.
+  const commandBody = { ...body, idempotencyKey };
+  try { return await apiPost<T>(path, commandBody, { idempotencyKey }); }
   catch (error) {
     if (!isNetworkFailure(error)) throw error;
-    const item: OfflineQueueItem = { id: randomId(), entity, data: body, idempotencyKey, createdAt: new Date().toISOString(), attempts: 0 };
+    const item: OfflineQueueItem = { id: randomId(), entity, path, data: commandBody, idempotencyKey, createdAt: new Date().toISOString(), attempts: 0 };
     writeOfflineQueue([...readOfflineQueue(), item]);
     throw new OfflineQueuedError(item.id);
   }
 }
 
-// NOTE: unlike the local-desktop-server deployment, the real backend has no
-// generic entity-sync endpoint (`/sync/push`) — this offline queue can
-// still capture failed commands locally, but replaying them needs each
-// command's real /api/v1/vendor/* endpoint re-called individually, not a
-// bulk sync endpoint. Left as a known gap for whoever wires up true offline
-// support for the web deployment; not attempted in this pass.
-export async function replayOfflineQueue(_options: { force?: boolean } = {}): Promise<{ accepted: number; applied: number; failed: number; remaining: number }> {
+const offlineReplayPaths: Record<OfflineQueueItem['entity'], string> = {
+  laundry_order: '/laundry/orders',
+  laundry_expense: '/laundry/expenses',
+  party: '/laundry/customers',
+};
+
+/** Replay known create commands through their real web adapters. Derive the
+ * route for older records; reject a mismatched stored path to avoid sending
+ * queued data to an arbitrary URL. */
+export async function replayOfflineQueue(options: { force?: boolean } = {}): Promise<{ accepted: number; applied: number; failed: number; remaining: number }> {
   const current = readOfflineQueue();
-  return { accepted: 0, applied: 0, failed: 0, remaining: current.length };
+  const now = Date.now();
+  const pending = current.filter((item) => !item.deadLetter && (options.force || !item.nextAttemptAt || Date.parse(item.nextAttemptAt) <= now));
+  if (!pending.length) return { accepted: 0, applied: 0, failed: 0, remaining: current.length };
+
+  const successful = new Set<string>();
+  const failed = new Map<string, OfflineQueueItem>();
+  for (const item of pending) {
+    const replayPath = offlineReplayPaths[item.entity];
+    const attempts = item.attempts + 1;
+    try {
+      if (item.path && item.path !== replayPath) throw new Error('This saved command does not match its supported replay route.');
+      await apiPost(replayPath, { ...item.data, idempotencyKey: item.idempotencyKey }, { idempotencyKey: item.idempotencyKey });
+      successful.add(item.id);
+    } catch (error) {
+      const delayMs = Math.min(15 * 60_000, 5_000 * (2 ** Math.max(0, attempts - 1)));
+      failed.set(item.id, {
+        ...item,
+        attempts,
+        nextAttemptAt: new Date(Date.now() + delayMs).toISOString(),
+        lastError: error instanceof Error ? error.message : 'Command replay failed.',
+        deadLetter: attempts >= 5,
+      });
+    }
+  }
+
+  const next = current.filter((item) => !successful.has(item.id)).map((item) => failed.get(item.id) || item);
+  writeOfflineQueue(next);
+  return { accepted: pending.length, applied: successful.size, failed: pending.length - successful.size, remaining: next.length };
 }
 
 function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
@@ -160,19 +198,20 @@ function recordFailure(path: string, status: number, message: string) {
 
 const realCalls: Real = {
   get: (path) => request<any>(path, { headers: authHeaders() }),
-  post: (path, body) => request<any>(path, { method: 'POST', headers: authHeaders(body !== undefined ? { 'Content-Type': 'application/json' } : {}), body: body !== undefined ? JSON.stringify(body) : undefined }),
+  post: (path, body, options = {}) => request<any>(path, { method: 'POST', headers: authHeaders({ ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), 'Idempotency-Key': options.idempotencyKey || idempotencyKey() }), body: body !== undefined ? JSON.stringify(body) : undefined }),
   put: (path, body) => request<any>(path, { method: 'PUT', headers: authHeaders({ 'Content-Type': 'application/json' }), body: body !== undefined ? JSON.stringify(body) : undefined }),
   patch: (path, body) => request<any>(path, { method: 'PATCH', headers: authHeaders({ 'Content-Type': 'application/json' }), body: body !== undefined ? JSON.stringify(body) : undefined }),
   del: (path) => request<any>(path, { method: 'DELETE', headers: authHeaders() }),
 };
 
 /** Website build only: answer an old local-server path from the real backend. Returns undefined when no adapter exists (the call then goes to the real backend at its original path). */
-async function viaAdapter<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: any): Promise<{ hit: boolean; value?: T }> {
+async function viaAdapter<T>(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, body?: any, options: RequestOptions = {}): Promise<{ hit: boolean; value?: T }> {
   if (!isWebOnly) return { hit: false };
   const found = matchAdapter(method, path);
   if (!found) return { hit: false };
   let value: unknown;
-  try { value = await found.fn({ ...realCalls, params: found.params, query: found.query, body }); }
+  const calls: Real = { ...realCalls, post: (realPath, realBody) => realCalls.post(realPath, realBody, options) };
+  try { value = await found.fn({ ...calls, params: found.params, query: found.query, body }); }
   catch (error) { recordFailure(`${method} ${path} (adapter)`, 0, error instanceof Error ? error.message : String(error)); throw error; }
   return { hit: true, value: value as T };
 }
@@ -190,7 +229,7 @@ export async function apiGet<T = any>(path: string): Promise<T> {
 }
 
 export async function apiPost<T = any>(path: string, body?: any, options: RequestOptions = {}): Promise<T> {
-  const adapted = await viaAdapter<T>('POST', path, body);
+  const adapted = await viaAdapter<T>('POST', path, body, options);
   if (adapted.hit) return adapted.value as T;
   const headers = authHeaders({ 'Idempotency-Key': options.idempotencyKey || idempotencyKey() });
   if (body !== undefined) headers['Content-Type'] = 'application/json';

@@ -45,6 +45,18 @@ try {
   const service = catalogue.services.find((item: any) => item.name === 'Steam Iron')!;
   const activeSession = signIn('owner-test', 'ChangedPassword!26');
   const headers = { cookie: `epic_session=${activeSession.token}`, 'idempotency-key': 'booking-auth-test-001' };
+  const quickAddPayload = { garment: { name: 'Quick-add overcoat', category: catalogue.categories.find((item: any) => item.name === "Men's Wear")!.id, unit: 'Piece', hsn: '9997' }, service: service.id, rate: 175 };
+  const quickAddHeaders = { ...headers, 'idempotency-key': 'catalogue-quick-add-auth-test-001' };
+  const quickAdd = await app.inject({ method: 'POST', url: '/api/laundry/catalogue/quick-add', headers: quickAddHeaders, payload: quickAddPayload });
+  assert.equal(quickAdd.statusCode, 201, `owner can add a garment with its first service price: ${quickAdd.body}`);
+  assert.equal(quickAdd.json().garment.name, 'Quick-add overcoat', 'quick add returns the saved garment');
+  assert.equal(quickAdd.json().price.rate, 175, 'quick add returns the saved service price');
+  const quickAddRetry = await app.inject({ method: 'POST', url: '/api/laundry/catalogue/quick-add', headers: quickAddHeaders, payload: quickAddPayload });
+  assert.equal(quickAddRetry.statusCode, 201, 'a repeated quick add with the same idempotency key succeeds');
+  assert.equal(quickAddRetry.json().garment.id, quickAdd.json().garment.id, 'a repeated quick add returns the original garment');
+  assert.equal(quickAddRetry.json().price.id, quickAdd.json().price.id, 'a repeated quick add returns the original price rule');
+  const quickAddCatalogue = await app.inject({ method: 'GET', url: '/api/laundry/catalogue', headers });
+  assert.equal(quickAddCatalogue.json().prices.some((row: any) => row.garment === quickAdd.json().garment.id && row.service === service.id && row.rate === 175), true, 'the newly saved item and price are immediately selectable from the catalogue');
   const staffCreate = await app.inject({ method: 'POST', url: '/api/settings/staff', headers, payload: { username: 'processing-user', password: 'ProcessingPassword!26', roles: ['processing_staff'], firstName: 'Priya', lastName: 'Pressing', email: 'priya@example.test', phone: '9000000001', description: 'Finishing desk' } });
   assert.equal(staffCreate.statusCode, 201, 'owner can create a scoped staff identity');
   assert.equal(staffCreate.json().firstName, 'Priya', 'staff profile fields persist and return safely');
@@ -66,13 +78,57 @@ try {
   assert.throws(() => signIn('processing-user', 'ProcessingPassword!26'), /invalid username or password/, 'disabled staff cannot sign in');
   const lastOwnerDisable = await app.inject({ method: 'POST', url: `/api/settings/staff/${owner.id}/enabled`, headers, payload: { enabled: false } });
   assert.equal(lastOwnerDisable.statusCode, 400, 'the final enabled owner cannot be disabled');
-  const settingsSave = await app.inject({ method: 'POST', url: '/api/settings/store', headers, payload: { businessName: 'Auth Test Laundry', upiId: 'auth-test@upi', qrOnPrint: true, logoDataUrl: 'data:image/svg+xml;base64,PHN2Zy8+', taxMode: 'gst', gstin: '22AAAAA0000A1Z5', currency: 'INR', timezone: 'Asia/Kolkata', printerProfile: 'thermal-80mm', afterBooking: 'open-print-centre', printerProfiles: [{ id: 'tag-58', name: 'Tag printer 58', kind: 'tag', connection: 'usb', device: 'USB001', paperWidthMm: 58, paperHeightMm: 51, orientation: 'portrait', marginMm: 3, dpi: 203, copies: 1, silentPrintEnabled: false, supportsQr: true, supportsBarcode: true }], tagTemplate: { preset: 'thermal-50x25', widthMm: 50, heightMm: 25, columns: 1, rows: 1, codeFormat: 'qr+code128', showCustomer: false, showOrder: true, showDueDate: false, showSequence: true } } });
+  const settingsSave = await app.inject({ method: 'POST', url: '/api/settings/store', headers, payload: { businessName: 'Auth Test Laundry', addressLine1: 'Unit 12', addressLine2: 'Market Road', city: 'Kolkata', state: 'West Bengal', postalCode: '700001', landmark: 'Clock tower', description: 'Care for everyday garments.', googleReviewUrl: 'https://example.com/reviews', termsAndConditions: 'Please collect within 30 days.', upiId: 'auth-test@upi', qrOnPrint: true, logoDataUrl: 'data:image/svg+xml;base64,PHN2Zy8+', taxMode: 'gst', taxSameAsCompany: true, gstin: '22AAAAA0000A1Z5', currency: 'INR', timezone: 'Asia/Kolkata', printerProfile: 'thermal-80mm', afterBooking: 'open-print-centre', printerProfiles: [{ id: 'tag-58', name: 'Tag printer 58', kind: 'tag', connection: 'usb', device: 'USB001', paperWidthMm: 58, paperHeightMm: 51, orientation: 'portrait', marginMm: 3, dpi: 203, copies: 1, silentPrintEnabled: false, supportsQr: true, supportsBarcode: true }], tagTemplate: { preset: 'thermal-50x25', widthMm: 50, heightMm: 25, columns: 1, rows: 3, codeFormat: 'qr+code128', showCustomer: false, showOrder: true, showDueDate: false, showSequence: true } } });
   assert.equal(settingsSave.statusCode, 200, 'owner can persist scoped store settings');
   const settingsRead = await app.inject({ method: 'GET', url: '/api/settings/store', headers });
   assert.equal(settingsRead.json().upiId, 'auth-test@upi', 'stored settings round-trip through the scoped API');
   assert.equal(settingsRead.json().logoDataUrl, 'data:image/svg+xml;base64,PHN2Zy8+', 'a local store logo round-trips without an external upload');
   assert.equal(settingsRead.json().taxMode, 'gst', 'tax mode is persisted in the scoped store profile');
+  assert.equal(settingsRead.json().taxSameAsCompany, true, 'the source-style company tax preference round-trips through the scoped profile');
   assert.equal(settingsRead.json().gstin, '22AAAAA0000A1Z5', 'GSTIN is normalized and persisted');
+  assert.equal(settingsRead.json().address, 'Unit 12, Market Road, Kolkata, West Bengal, 700001, Clock tower', 'structured profile address is composed for existing print consumers');
+  assert.equal(settingsRead.json().addressLine2, 'Market Road', 'source-style address lines are persisted independently');
+  assert.equal(settingsRead.json().googleReviewUrl, 'https://example.com/reviews', 'review URL is persisted for receipt output');
+  assert.equal(settingsRead.json().termsAndConditions, 'Please collect within 30 days.', 'receipt terms are persisted with the store');
+  const emptyOrderNoSeries = await app.inject({ method: 'GET', url: '/api/settings/order-no-series', headers });
+  assert.deepEqual(emptyOrderNoSeries.json(), [], 'a new branch starts with an empty order number series list');
+  const orderNoSeriesCreate = await app.inject({ method: 'POST', url: '/api/settings/order-no-series', headers, payload: { name: 'Main counter', prefix: 'MAIN' } });
+  assert.equal(orderNoSeriesCreate.statusCode, 200, 'owner can add a required name/prefix series');
+  assert.equal(orderNoSeriesCreate.json().name, 'Main counter');
+  assert.equal(orderNoSeriesCreate.json().prefix, 'MAIN');
+  const orderNoSeriesRead = await app.inject({ method: 'GET', url: '/api/settings/order-no-series', headers });
+  assert.equal(orderNoSeriesRead.json().length, 1, 'order number series persist through the settings API');
+  const duplicateSeriesPrefix = await app.inject({ method: 'POST', url: '/api/settings/order-no-series', headers, payload: { name: 'Duplicate', prefix: 'main' } });
+  assert.equal(duplicateSeriesPrefix.statusCode, 400, 'prefixes are unique without case sensitivity');
+  const emptyStorePackages = await app.inject({ method: 'GET', url: '/api/settings/store-packages', headers });
+  assert.deepEqual(emptyStorePackages.json(), [], 'a new branch starts with an empty Store Packages list');
+  const storePackageCreate = await app.inject({ method: 'POST', url: '/api/settings/store-packages', headers, payload: {
+    name: 'Steam plan', amount: 2499.99, serviceIds: [service.id], limitsEnabled: true,
+    serviceLimits: [{ serviceId: service.id, quantityLimit: 5.5, amountLimit: 3000 }],
+  } });
+  assert.equal(storePackageCreate.statusCode, 200, `owner can save source-shaped Store Package settings: ${storePackageCreate.body}`);
+  assert.equal(storePackageCreate.json().services[0].name, 'Steam Iron', 'package services use the active branch catalogue name');
+  assert.equal(storePackageCreate.json().serviceLimits[0].quantityLimit, 5.5, 'fractional service quantity limits persist exactly');
+  assert.equal(storePackageCreate.json().serviceLimits[0].amountLimit, 3000, 'service amount limits persist as fixed-scale money');
+  const invalidStorePackage = await app.inject({ method: 'POST', url: '/api/settings/store-packages', headers, payload: {
+    name: 'Invalid limits', amount: 100, serviceIds: [service.id], limitsEnabled: true, serviceLimits: [],
+  } });
+  assert.equal(invalidStorePackage.statusCode, 400, 'service-wise limits must have one group per selected service');
+  const excessivePrecisionPackage = await app.inject({ method: 'POST', url: '/api/settings/store-packages', headers, payload: {
+    name: 'Invalid quantity precision', amount: 100, serviceIds: [service.id], limitsEnabled: true,
+    serviceLimits: [{ serviceId: service.id, quantityLimit: 1.2345, amountLimit: 100 }],
+  } });
+  assert.equal(excessivePrecisionPackage.statusCode, 400, 'quantity limits reject values beyond three decimal places');
+  const genericSettingsAttempt = await app.inject({ method: 'POST', url: '/api/settings/store', headers, payload: {
+    storePackages: [{ id: 'forged', name: 'Unvalidated package', amount: 1, services: [], limitsEnabled: false, serviceLimits: [] }],
+  } });
+  assert.equal(genericSettingsAttempt.statusCode, 200, 'unrelated store settings can still save through their existing endpoint');
+  const storePackagesRead = await app.inject({ method: 'GET', url: '/api/settings/store-packages', headers });
+  assert.equal(storePackagesRead.json().length, 1, 'Store Package settings persist through the authenticated branch API');
+  assert.equal(storePackagesRead.json()[0].id, storePackageCreate.json().id, 'generic profile saves cannot overwrite the validated Store Package list');
+  const printProfileRead = await app.inject({ method: 'GET', url: '/api/laundry/print-settings', headers });
+  assert.equal(printProfileRead.json().termsAndConditions, 'Please collect within 30 days.', 'print settings expose saved customer receipt terms');
+  assert.equal(printProfileRead.json().googleReviewUrl, 'https://example.com/reviews', 'print settings expose only the validated review URL');
   const gstProfile = await app.inject({ method: 'PUT', url: '/api/gst/tax-profile', headers: { ...headers, 'idempotency-key': 'gst-profile-sync-001' }, payload: { legalName: 'Auth Test Laundry Pvt Ltd', address: 'Kolkata, West Bengal', stateCode: '19', pincode: '700001', registrationStatus: 'Registered', gstin: '19ABCDE1234F1Z5', einvoiceState: 'NotApplicable', invoiceSeries: 'AUTH' } });
   assert.equal(gstProfile.statusCode, 200, 'owner can save a valid registered GST supplier profile');
   assert.equal(gstProfile.json().counterTaxMode, 'gst', 'a registered GST profile enables the counter tax mode');
@@ -88,6 +144,8 @@ try {
   assert.equal(settingsRead.json().tagTemplate.codeFormat, 'qr+code128', 'tag template code format is persisted per store');
   assert.throws(() => store.saveStoreSettings('AUTH', 'owner-test', { taxMode: 'gst', gstin: 'not-a-gstin' }, 'STORE-A'), /GSTIN/, 'invalid GSTIN is rejected before persistence');
   assert.throws(() => store.saveStoreSettings('AUTH', 'owner-test', { timezone: 'Not/AZone' }, 'STORE-A'), /timezone/, 'invalid timezone is rejected before persistence');
+  assert.throws(() => store.saveStoreSettings('AUTH', 'owner-test', { googleReviewUrl: 'javascript:alert(1)' }, 'STORE-A'), /http or https/, 'review links reject unsafe protocols');
+  assert.throws(() => store.saveStoreSettings('AUTH', 'owner-test', { termsAndConditions: 'x'.repeat(4001) }, 'STORE-A'), /4000 characters/, 'receipt terms have a bounded length');
   assert.equal(store.withStoreScope('AUTH', 'STORE-A', () => store.auditOf('AUTH').some((entry) => entry.action === 'settings:store-updated')), true, 'store settings changes create an audit record in their own branch');
   const storeCreate = await app.inject({ method: 'POST', url: '/api/settings/stores', headers, payload: { name: 'North Branch', code: 'north' } });
   assert.equal(storeCreate.statusCode, 201, 'owner can create a branch with an explicit code');
@@ -98,10 +156,20 @@ try {
   assert.equal(contextForToken(activeSession.token)?.storeId, storeCreate.json().id, 'active session persists branch selection');
   const newBranchSettings = await app.inject({ method: 'GET', url: '/api/settings/store', headers });
   assert.equal(newBranchSettings.json().businessName, 'Epic Laundry', 'new branch settings do not inherit another branch profile');
+  const newBranchSeries = await app.inject({ method: 'GET', url: '/api/settings/order-no-series', headers });
+  assert.deepEqual(newBranchSeries.json(), [], 'order number series do not leak to a new branch');
+  const newBranchStorePackages = await app.inject({ method: 'GET', url: '/api/settings/store-packages', headers });
+  assert.deepEqual(newBranchStorePackages.json(), [], 'Store Packages do not leak to another branch');
   const restoreStore = await app.inject({ method: 'POST', url: '/api/auth/switch-store', headers, payload: { storeId: 'STORE-A' } });
   assert.equal(restoreStore.statusCode, 200, 'owner can switch back to their original branch');
   const restoredSettings = await app.inject({ method: 'GET', url: '/api/settings/store', headers });
   assert.equal(restoredSettings.json().businessName, 'Auth Test Laundry', 'switching restores the original store-scoped profile');
+  const restoredSeries = await app.inject({ method: 'GET', url: '/api/settings/order-no-series', headers });
+  assert.equal(restoredSeries.json().length, 1, 'switching back restores the original branch order number series');
+  const restoredStorePackages = await app.inject({ method: 'GET', url: '/api/settings/store-packages', headers });
+  assert.equal(restoredStorePackages.json().length, 1, 'switching back restores the original branch Store Packages');
+  const storeCharges = await app.inject({ method: 'GET', url: '/api/laundry/catalogue/charges', headers });
+  assert.equal(storeCharges.statusCode, 200, 'owner can read the branch-scoped Store Charges settings list');
   const body = {
     customer: { name: 'Idempotent Customer', phone: '9000000201' },
     items: [{ garment: garment.id, service: service.id, qty: 1 }],
@@ -118,6 +186,8 @@ try {
   assert.equal(inbox.json().some((entry: any) => String(entry.title).includes(first.json().order.orderNumber)), true, 'booking creates an internal operational notification');
   createOperationalUser(activeSession.context, { username: 'store-b-counter', password: 'StoreBPassword!26', roles: ['counter_staff'], storeId: 'STORE-B' });
   const secondStore = signIn('store-b-counter', 'StoreBPassword!26');
+  const storePackageAccessDenied = await app.inject({ method: 'GET', url: '/api/settings/store-packages', headers: { cookie: `epic_session=${secondStore.token}` } });
+  assert.equal(storePackageAccessDenied.statusCode, 403, 'non-owner counter roles cannot read Store Package settings');
   const secondStoreOrders = await app.inject({ method: 'GET', url: '/api/laundry/orders', headers: { cookie: `epic_session=${secondStore.token}` } });
   assert.equal(secondStoreOrders.statusCode, 200, 'authorised Store B counter can access its own queue');
   assert.equal(secondStoreOrders.json().length, 0, 'Store B cannot read Store A orders');
@@ -128,6 +198,8 @@ try {
   assert.equal(crossStoreDetail.statusCode, 404, 'Store B cannot retrieve Store A order by identifier');
   const deniedSettings = await app.inject({ method: 'POST', url: '/api/settings/store', headers: { cookie: `epic_session=${secondStore.token}` }, payload: { businessName: 'Unauthorised change' } });
   assert.equal(deniedSettings.statusCode, 403, 'counter staff cannot edit owner-only store settings');
+  const deniedOrderNoSeries = await app.inject({ method: 'POST', url: '/api/settings/order-no-series', headers: { cookie: `epic_session=${secondStore.token}` }, payload: { name: 'Not allowed', prefix: 'NO' } });
+  assert.equal(deniedOrderNoSeries.statusCode, 403, 'counter staff cannot change order number series');
   const staffPrintSettings = await app.inject({ method: 'GET', url: '/api/laundry/print-settings', headers: { cookie: `epic_session=${secondStore.token}` } });
   assert.equal(staffPrintSettings.statusCode, 200, 'counter staff can read branch-scoped print settings');
   assert.equal(staffPrintSettings.json().businessName, 'Epic Laundry', 'counter print settings do not leak another branch profile');
@@ -137,6 +209,10 @@ try {
   assert.equal(deniedCatalogueImport.statusCode, 403, 'counter staff cannot mutate the master catalogue through bulk import');
   const deniedCatalogueChange = await app.inject({ method: 'POST', url: '/api/laundry/catalogue/categories', headers: { cookie: `epic_session=${secondStore.token}` }, payload: { name: 'Unauthorised category', color: '#664CF0' } });
   assert.equal(deniedCatalogueChange.statusCode, 403, 'counter staff cannot mutate protected catalogue configuration');
+  const deniedQuickAdd = await app.inject({ method: 'POST', url: '/api/laundry/catalogue/quick-add', headers: { cookie: `epic_session=${secondStore.token}`, 'idempotency-key': 'denied-catalogue-quick-add-001' }, payload: { garment: { name: 'Unauthorised quick add', category: catalogue.categories[0].id, unit: 'Piece' }, service: service.id, rate: 99 } });
+  assert.equal(deniedQuickAdd.statusCode, 403, 'counter staff without Catalogue management permission cannot quick-add catalogue items');
+  const deniedStoreCharges = await app.inject({ method: 'GET', url: '/api/laundry/catalogue/charges', headers: { cookie: `epic_session=${secondStore.token}` } });
+  assert.equal(deniedStoreCharges.statusCode, 403, 'counter staff cannot read owner-only Store Charges settings');
   const catalogueB = store.withStoreScope('AUTH', 'STORE-B', () => { seedLaundryDefaults('AUTH'); return laundryCatalogue('AUTH'); });
   const bGarment = catalogueB.garments.find((item: any) => item.name === 'Shirt / T-shirt')!;
   const bService = catalogueB.services.find((item: any) => item.name === 'Steam Iron')!;

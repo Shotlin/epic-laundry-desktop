@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test('isolated demo workspace provides its documented seeded login', async ({ page }) => {
-  await page.goto('/ui/app/');
+  await page.goto('/ui/app/?local-demo=1');
   await expect(page.getByText('Demo access')).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Username' })).toHaveValue('demo');
   await expect(page.getByRole('textbox', { name: 'Password' })).toHaveValue('DemoLaundry!2026');

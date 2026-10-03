@@ -2,17 +2,20 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Store } from './kernel/store.js';
+import type { Store as StoreInstance } from './kernel/store.js';
 import type { EntityRow } from './kernel/types.js';
 
 const tempDir = mkdtempSync(join(tmpdir(), 'epic-order-search-'));
+process.env.EPIC_DB_FILE = join(tempDir, 'singleton.sqlite');
+process.env.EPIC_LEGACY_JSON_FILE = join(tempDir, 'legacy.json');
+const { Store, store: singletonStore } = await import('./kernel/store.js');
 const databaseFile = join(tempDir, 'nested', 'search.sqlite');
 const tenant = 'SEARCH-TEST';
 const storeId = 'STORE-DEFAULT';
 const at = '2026-09-03T00:00:00.000Z';
 const row = (id: string, entity: string, data: Record<string, unknown>, version = 1): EntityRow => ({ id, entity, tenant, status: 'Submitted', version, created_by: 'test', created_at: at, updated_at: at, data });
 
-let store: Store | undefined;
+let store: StoreInstance | undefined;
 try {
   store = new Store(databaseFile, { skipLegacyImport: true });
   store.withStoreScope(tenant, storeId, () => {
@@ -39,5 +42,6 @@ try {
   console.log('PASS order search projection backfill, update, and restart self-test complete');
 } finally {
   store?.close();
+  singletonStore.close();
   rmSync(tempDir, { recursive: true, force: true });
 }

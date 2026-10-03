@@ -3,7 +3,8 @@ import { expect, test } from '@playwright/test'
 test('the desktop root opens the integrated Laundry Desk app', async ({ page }) => {
   await page.goto('/ui/', { waitUntil: 'domcontentloaded' })
   await expect(page).toHaveURL(/\/ui\/app\/$/)
-  await expect(page.getByText('Demo access')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Sign in with your LNDRY vendor number' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Open isolated demo workspace instead' })).toBeVisible()
   await expect(page.locator('body')).not.toContainText('Epic BOS')
 
   const legacyRoutes = [

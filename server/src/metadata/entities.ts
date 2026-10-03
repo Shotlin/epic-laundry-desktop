@@ -72,6 +72,21 @@ export const ENTITIES: EntityDef[] = [
     permissions: [{ role: 'admin', read: true, write: true }],
   },
   {
+    name: 'laundry_service_unit',
+    label: 'Laundry Service Unit',
+    kind: 'master',
+    module: 'laundry',
+    naming: { series: 'LSU-{#####}', example: 'LSU-00001' },
+    fields: [
+      { name: 'value', type: 'text', required: true },
+      { name: 'fullName', type: 'text', required: true },
+      { name: 'shortName', type: 'text', required: true },
+      { name: 'builtInValue', type: 'text' },
+      { name: 'active', type: 'check' },
+    ],
+    permissions: [{ role: 'admin', read: true, write: true }],
+  },
+  {
     name: 'laundry_garment',
     label: 'Laundry Garment',
     kind: 'master',

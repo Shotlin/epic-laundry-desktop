@@ -4,6 +4,7 @@
 import type { LaundryCatalogue } from '../laundry'
 import { route, rupees, toPaise, listOf } from './core'
 import { forgetCatalogue } from './quote'
+import { storedServiceUnitRecords } from './settings'
 
 type Category = { id: string; parentId: string | null; name: string; color: string | null; imageUrl: string | null; sortOrder: number; active: boolean; source: 'MARKETPLACE' | 'POS' }
 type Service = { id: string; name: string; description: string; imageUrl: string | null; units: string[]; active: boolean; source: 'MARKETPLACE' | 'POS' }
@@ -11,7 +12,7 @@ type Garment = { id: string; categoryId: string | null; name: string; code: stri
 type Price = { id: string; garmentId: string; serviceId: string; customerUserId: string | null; ratePaise: number; active: boolean; source: 'MARKETPLACE' | 'POS'; marketplaceRatePaise: number | null; priceOverridden: boolean }
 type TaxRule = { id: string; name: string; rateBps: number; active: boolean }
 type PosCatalogue = { categories: Category[]; services: Service[]; garments: Garment[]; prices: Price[]; taxRules: TaxRule[]; lastSyncedAt: string | null }
-type Rule = { id: string; name: string; type: 'FLAT' | 'PERCENTAGE'; flatAmountPaise: number | null; percentageBps: number | null; description: string | null; active: boolean }
+type Rule = { id: string; name: string; type: 'FLAT' | 'PERCENTAGE'; flatAmountPaise: number | null; percentageBps: number | null; description: string | null; expressCharge?: boolean; isExpress?: boolean; express?: boolean; active: boolean }
 
 export const unitLabel = (unit: string) => {
   const key = String(unit || '').toLowerCase()
@@ -27,6 +28,7 @@ const ruleShape = (rule: Rule) => ({
   name: rule.name,
   type: rule.type === 'PERCENTAGE' ? 'Percentage' as const : 'Flat' as const,
   amount: rule.type === 'PERCENTAGE' ? (rule.percentageBps || 0) / 100 : rupees(rule.flatAmountPaise),
+  expressCharge: Boolean(rule.expressCharge ?? rule.isExpress ?? rule.express),
   description: rule.description || '',
   active: rule.active,
 })
@@ -39,7 +41,7 @@ const categoryLabel = (categories: Map<string, Category>, id: string | null) => 
   return parent ? `${parent.name} › ${own.name}` : own.name
 }
 
-export async function loadCatalogue(get: (path: string) => Promise<any>): Promise<LaundryCatalogue> {
+export async function loadCatalogue(get: (path: string) => Promise<any>, serviceUnitRecords = storedServiceUnitRecords('store')): Promise<LaundryCatalogue> {
   const [pos, charges, discounts] = await Promise.all([
     get('/vendor/pos-catalogue') as Promise<PosCatalogue>,
     get('/vendor/adjustment-rules/charge').catch(() => []),
@@ -71,11 +73,43 @@ export async function loadCatalogue(get: (path: string) => Promise<any>): Promis
     chargeRules: (listOf(charges) as Rule[]).map(ruleShape),
     discountRules: (listOf(discounts) as Rule[]).map(ruleShape),
     taxRules: pos.taxRules.map((rule) => ({ id: rule.id, name: rule.name, rate: rule.rateBps / 100, active: rule.active })),
-    serviceUnits: ['Piece', 'Kilogram', 'Pair', 'Square Foot'],
+    serviceUnits: serviceUnitRecords.filter((unit) => unit.active).map((unit) => unit.value),
+    serviceUnitRecords,
   }
 }
 
-route('GET', '/laundry/catalogue', ({ get }) => loadCatalogue(get))
+route('GET', '/laundry/catalogue', async ({ get }) => {
+  const profile = await get('/vendor/profile').catch(() => ({}))
+  return loadCatalogue(get, storedServiceUnitRecords(profile.id || profile.branch_code || 'store'))
+})
+route('GET', '/laundry/settings/categories', async ({ get }) => {
+  const catalogue = await get('/vendor/pos-catalogue') as PosCatalogue
+  const garmentUse = new Map<string, number>()
+  for (const garment of catalogue.garments || []) {
+    if (garment.active === false || !garment.categoryId) continue
+    garmentUse.set(garment.categoryId, (garmentUse.get(garment.categoryId) || 0) + 1)
+  }
+  return (catalogue.categories || []).map((category) => ({
+    id: category.id, name: category.name, color: category.color || '', image: category.imageUrl || '',
+    sort_order: category.sortOrder, active: category.active, parentId: category.parentId || undefined,
+    source: category.source, usageCount: garmentUse.get(category.id) || 0,
+  })).sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || a.name.localeCompare(b.name))
+})
+route('GET', '/laundry/settings/services', async ({ get }) => {
+  const catalogue = await get('/vendor/pos-catalogue') as PosCatalogue
+  const priceUse = new Map<string, number>()
+  for (const price of catalogue.prices || []) {
+    if (price.active === false) continue
+    priceUse.set(price.serviceId, (priceUse.get(price.serviceId) || 0) + 1)
+  }
+  return (catalogue.services || []).map((service) => ({
+    id: service.id, name: service.name, description: service.description || '', units: service.units || [],
+    image: service.imageUrl || '', active: service.active, source: service.source,
+    usageCount: priceUse.get(service.id) || 0,
+  })).sort((a, b) => a.name.localeCompare(b.name))
+})
+route('GET', '/laundry/catalogue/charges', async ({ get }) => (listOf(await get('/vendor/adjustment-rules/charge')) as Rule[]).map(ruleShape))
+route('GET', '/laundry/catalogue/discounts', async ({ get }) => (listOf(await get('/vendor/adjustment-rules/discount')) as Rule[]).map(ruleShape))
 
 // The quote adapter keeps a short-lived copy of the catalogue; drop it after any change.
 const forgetCatalogueCache = () => forgetCatalogue()
@@ -117,10 +151,11 @@ async function garmentBody(body: Body) {
   return { name: body.name, code: body.code ?? '', categoryId: body.category || body.categoryId || null, unit: body.unit, hsn: body.hsn ?? '', gstRate: Number(body.gstRate ?? body.gst_rate ?? 0), active: body.active !== false, imageUrl: await compactImage(body.photo ?? body.imageUrl) }
 }
 const priceBody = (body: Body) => ({ garmentId: body.garment, serviceId: body.service, customerUserId: body.customer || null, ratePaise: toPaise(body.rate), active: body.active !== false, resetToMarketplace: Boolean(body.resetToMarketplace) })
-const ruleBody = (body: Body) => {
+const ruleBody = (body: Body, isCharge = false) => {
   const percentage = body.type === 'Percentage'
   return {
     name: body.name, type: percentage ? 'PERCENTAGE' : 'FLAT', description: body.description || undefined, active: body.active !== false,
+    ...(isCharge ? { expressCharge: Boolean(body.expressCharge) } : {}),
     ...(percentage ? { percentageBps: Math.round((Number(body.amount) || 0) * 100) } : { flatAmountPaise: toPaise(body.amount) }),
   }
 }
@@ -133,6 +168,52 @@ const KINDS: Record<string, { path: string; body: (body: Body) => Body | Promise
   prices: { path: 'prices', body: priceBody },
   taxes: { path: 'taxes', body: taxBody },
 }
+
+// Keep a temporary failure between the garment and its first price recoverable:
+// retrying the same quick-add resumes the matching garment instead of duplicating it.
+route('POST', '/laundry/catalogue/quick-add', async ({ get, post, body }) => {
+  const pos = await get('/vendor/pos-catalogue') as PosCatalogue
+  const normalize = (value: unknown) => String(value ?? '').trim().toLocaleLowerCase()
+  const name = String(body?.garment?.name || '').trim()
+  const categoryId = String(body?.garment?.category || body?.garment?.categoryId || '')
+  const serviceId = String(body?.service || '')
+  const unit = unitLabel(body?.garment?.unit || 'Piece')
+  const rate = Number(body?.rate)
+  const category = pos.categories.find((item) => item.id === categoryId && item.active !== false)
+  const service = pos.services.find((item) => item.id === serviceId && item.active !== false)
+  if (!name || name.length > 160) throw new Error('Enter a garment name between 1 and 160 characters.')
+  if (!category) throw new Error('Choose an active garment category.')
+  if (!service) throw new Error('Choose an active service.')
+  if (!(service.units || []).includes(unit)) throw new Error(`The ${service.name} service does not support ${unit.toLowerCase()} items.`)
+  if (!Number.isFinite(rate) || rate <= 0 || rate > 1_000_000) throw new Error('Enter a price greater than ₹0 and no more than ₹10,00,000.')
+
+  let garment = pos.garments.find((item) => normalize(item.name) === normalize(name))
+  const code = String(body.garment.code || garment?.code || name.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48))
+  if (garment) {
+    if (garment.categoryId !== categoryId || unitLabel(garment.unit) !== unit || (garment.code && normalize(garment.code) !== normalize(code))) {
+      throw new Error(`“${name}” already exists with different catalogue details. Open Catalogue to review it.`)
+    }
+  } else {
+    garment = await post('/vendor/pos-catalogue/garments', await KINDS.garments.body({ ...body.garment, name, code, category: categoryId, unit })) as Garment
+  }
+
+  const existingPrice = pos.prices.find((item) => item.garmentId === garment!.id && item.serviceId === serviceId && !item.customerUserId)
+  if (existingPrice) {
+    if (!existingPrice.active) throw new Error(`“${name}” already has a disabled price for this service. Review it in Catalogue.`)
+    if (existingPrice.ratePaise !== toPaise(rate)) throw new Error(`“${name}” already has a different ${service.name} price. Review it in Catalogue.`)
+    forgetCatalogueCache()
+    return { garment, price: existingPrice, resumed: true }
+  }
+  try {
+    const price = await post('/vendor/pos-catalogue/prices', priceBody({ garment: garment.id, service: serviceId, rate }))
+    forgetCatalogueCache()
+    return { garment, price }
+  } catch (error) {
+    forgetCatalogueCache()
+    const reason = error instanceof Error ? error.message : 'the price service did not respond'
+    throw new Error(`The garment was saved, but its ${service.name} price was not. Press Save again to finish this item, or review it in Catalogue. (${reason})`)
+  }
+})
 
 // Reviewed JSON import: matches by id or name, updates what exists, creates what does not. Counter records only.
 route('POST', '/laundry/catalogue/import', async ({ get, post, put, body }) => {
@@ -166,7 +247,7 @@ route('POST', '/laundry/catalogue/import', async ({ get, post, put, body }) => {
   }
   for (const [kind, list] of [['charge', body.chargeRules], ['discount', body.discountRules]] as const) {
     for (const [index, row] of ((list || []) as Body[]).entries()) {
-      try { await post(`/vendor/adjustment-rules/${kind}`, ruleBody(row)); result.created += 1 } catch (error) { result.errors.push({ row: index + 1, message: `${kind}: ${error instanceof Error ? error.message : 'could not be saved'}` }); result.skipped += 1 }
+      try { await post(`/vendor/adjustment-rules/${kind}`, ruleBody(row, kind === 'charge')); result.created += 1 } catch (error) { result.errors.push({ row: index + 1, message: `${kind}: ${error instanceof Error ? error.message : 'could not be saved'}` }); result.skipped += 1 }
     }
   }
   for (const [index, row] of ((body.taxRules || []) as Body[]).entries()) {
@@ -177,7 +258,11 @@ route('POST', '/laundry/catalogue/import', async ({ get, post, put, body }) => {
 })
 
 route('POST', '/laundry/catalogue/:kind', async ({ post, params, body }) => {
-  if (params.kind === 'charges' || params.kind === 'discounts') return post(`/vendor/adjustment-rules/${params.kind === 'charges' ? 'charge' : 'discount'}`, ruleBody(body))
+  if (params.kind === 'charges' || params.kind === 'discounts') {
+    const saved = await post(`/vendor/adjustment-rules/${params.kind === 'charges' ? 'charge' : 'discount'}`, ruleBody(body, params.kind === 'charges'))
+    forgetCatalogueCache()
+    return saved
+  }
   const kind = KINDS[params.kind]
   if (!kind) throw new Error('That catalogue record type is not supported.')
   const saved = await post(`/vendor/pos-catalogue/${kind.path}`, await kind.body(body))
@@ -186,7 +271,11 @@ route('POST', '/laundry/catalogue/:kind', async ({ post, params, body }) => {
 })
 
 route('PATCH', '/laundry/catalogue/:kind/:id', async ({ put, params, body }) => {
-  if (params.kind === 'charges' || params.kind === 'discounts') return put(`/vendor/adjustment-rules/${params.kind === 'charges' ? 'charge' : 'discount'}/${params.id}`, ruleBody(body))
+  if (params.kind === 'charges' || params.kind === 'discounts') {
+    const saved = await put(`/vendor/adjustment-rules/${params.kind === 'charges' ? 'charge' : 'discount'}/${params.id}`, ruleBody(body, params.kind === 'charges'))
+    forgetCatalogueCache()
+    return saved
+  }
   const kind = KINDS[params.kind]
   if (!kind) throw new Error('That catalogue record type is not supported.')
   const saved = await put(`/vendor/pos-catalogue/${kind.path}/${params.id}`, await kind.body(body))

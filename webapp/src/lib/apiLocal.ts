@@ -23,6 +23,7 @@ const notifyUnauthorizedUnlessCloud = (body: unknown) => {
 export type OfflineQueueItem = {
   id: string;
   entity: 'laundry_order' | 'laundry_expense' | 'party';
+  path?: string;
   data: Record<string, unknown>;
   idempotencyKey: string;
   createdAt: string;
@@ -58,6 +59,9 @@ const operatorMessages: Record<string, string> = {
   RIDER_ONLY_ACCOUNT: 'This phone is registered as a Captain (delivery) account. Captains cannot access the store desktop app.',
   AMBIGUOUS_VENDOR_ACCOUNT: 'This phone is not recognized as a vendor account for any shop. Contact support if you believe this is wrong.',
   CLOUD_LOGIN_INPUT_REQUIRED: 'Enter your phone number and the one-time code.',
+  CLOUD_NOT_CONNECTED: 'The LNDRY vendor account is not connected. Ask the store owner to connect it; you can continue without wallet or app sync.',
+  CLOUD_VENDOR_NOT_LINKED: 'The LNDRY account is connected but is not linked to a shop. Ask the store owner to finish setup.',
+  CLOUD_NOT_CONFIGURED: 'LNDRY connection is not configured yet. Ask the store owner to finish setup.',
 };
 
 export function operatorErrorMessage(error: unknown, fallback: string) {
@@ -93,7 +97,7 @@ export async function apiPostOffline<T = any>(path: string, body: Record<string,
   try { return await apiPost<T>(path, body, { idempotencyKey }); }
   catch (error) {
     if (!isNetworkFailure(error)) throw error;
-    const item: OfflineQueueItem = { id: randomId(), entity, data: body, idempotencyKey, createdAt: new Date().toISOString(), attempts: 0 };
+    const item: OfflineQueueItem = { id: randomId(), entity, path, data: body, idempotencyKey, createdAt: new Date().toISOString(), attempts: 0 };
     writeOfflineQueue([...readOfflineQueue(), item]);
     throw new OfflineQueuedError(item.id);
   }

@@ -23,19 +23,41 @@ export function completeOpenTask(tenant: string, actor: string, unitId: string, 
   audit(tenant, actor, 'laundry:production-task-completed', { entity: task.entity, row_id: task.id, after: { unitId, nextState, reason } });
 }
 
-function presentTask(tenant: string, row: ReturnType<typeof store.rowsOf>[number]) {
+function presentTask(row: ReturnType<typeof store.listProductionTaskContexts>[number]) {
+  const status = row.status as ProductionTaskStatus;
+  const dueCandidate = row.dueDate.trim();
+  const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(dueCandidate) ? dueCandidate : null;
+  const overdue = Boolean(dueDate && !['Completed', 'Cancelled'].includes(status) && dueDate < laundryBusinessDate());
+  return { id: row.id, unitId: row.unitId, tagCode: row.tagCode, orderId: row.orderId, orderNumber: row.orderNumber, garment: row.garment, station: row.station, kind: row.kind, status, priority: row.priority, assignedTo: row.assignedTo, reason: row.reason, completionNote: row.completionNote, createdAt: row.createdAt, updatedAt: row.updatedAt, completedAt: row.completedAt, dueDate, overdue };
+}
+
+function presentTaskFromRow(tenant: string, row: ReturnType<typeof store.rowsOf>[number]) {
   const unit = store.getGarmentUnit(tenant, String(row.data.garment_unit || ''));
   const order = unit ? store.getRow(tenant, unit.orderId) : undefined;
   const garment = unit ? store.getRow(tenant, unit.garmentId) : undefined;
-  const status = String(row.data.status || 'Open') as ProductionTaskStatus;
-  const dueCandidate = String(order?.data.expected_delivery_date || row.data.due_date || '').trim();
-  const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(dueCandidate) ? dueCandidate : null;
-  const overdue = Boolean(dueDate && !['Completed', 'Cancelled'].includes(status) && dueDate < laundryBusinessDate());
-  return { id: row.id, unitId: String(row.data.garment_unit), tagCode: unit?.activeTagCode || '', orderId: String(row.data.order || unit?.orderId || ''), orderNumber: order?.data.name || unit?.orderId || '', garment: garment?.data.name || unit?.garmentId || '', station: String(row.data.station || ''), kind: String(row.data.kind || ''), status, priority: String(row.data.priority || 'Normal'), assignedTo: String(row.data.assigned_to || ''), reason: String(row.data.reason || ''), completionNote: String(row.data.completion_note || ''), createdAt: row.created_at, updatedAt: row.updated_at, completedAt: row.data.completed_at || null, dueDate, overdue };
+  return presentTask({
+    id: row.id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    unitId: String(row.data.garment_unit || ''),
+    orderId: String(row.data.order || unit?.orderId || ''),
+    tagCode: unit?.activeTagCode || '',
+    orderNumber: String(order?.data.name || unit?.orderId || ''),
+    garment: String(garment?.data.name || unit?.garmentId || ''),
+    station: String(row.data.station || ''),
+    kind: String(row.data.kind || ''),
+    status: String(row.data.status || 'Open'),
+    priority: String(row.data.priority || 'Normal'),
+    assignedTo: String(row.data.assigned_to || ''),
+    reason: String(row.data.reason || ''),
+    completionNote: String(row.data.completion_note || ''),
+    completedAt: String(row.data.completed_at || '') || null,
+    dueDate: String(order?.data.expected_delivery_date || row.data.due_date || ''),
+  });
 }
 
 export function listProductionTasks(tenant: string, filters: { status?: string; station?: string; overdue?: string } = {}) {
-  return store.rowsOf(tenant, 'laundry_production_task').map((row) => presentTask(tenant, row)).filter((task) => (!filters.status || task.status === filters.status) && (!filters.station || task.station === filters.station) && (filters.overdue !== 'true' || task.overdue)).sort((a, b) => Number(b.overdue) - Number(a.overdue) || (a.status === 'Completed' ? 1 : 0) - (b.status === 'Completed' ? 1 : 0) || (a.priority === 'Urgent' ? -1 : 1) - (b.priority === 'Urgent' ? -1 : 1) || b.createdAt.localeCompare(a.createdAt));
+  return store.listProductionTaskContexts(tenant).map(presentTask).filter((task) => (!filters.status || task.status === filters.status) && (!filters.station || task.station === filters.station) && (filters.overdue !== 'true' || task.overdue)).sort((a, b) => Number(b.overdue) - Number(a.overdue) || (a.status === 'Completed' ? 1 : 0) - (b.status === 'Completed' ? 1 : 0) || (a.priority === 'Urgent' ? -1 : 1) - (b.priority === 'Urgent' ? -1 : 1) || b.createdAt.localeCompare(a.createdAt));
 }
 
 /** Truthful floor-load telemetry derived from durable task records. This is a
@@ -271,7 +293,7 @@ export function assignProductionTask(tenant: string, actor: string, id: string, 
   if (!assignedTo) throw new Error('assignee is required');
   task.data.assigned_to = assignedTo; task.updated_at = new Date().toISOString(); store.updateRow(task);
   audit(tenant, actor, 'laundry:production-task-assigned', { entity: task.entity, row_id: id, after: { assignedTo } });
-  return presentTask(tenant, task);
+  return presentTaskFromRow(tenant, task);
 }
 
 export function startProductionTask(tenant: string, actor: string, id: string) {
@@ -280,7 +302,7 @@ export function startProductionTask(tenant: string, actor: string, id: string) {
   if (task.data.status !== 'Open') throw new Error('only open production tasks can be started');
   const now = new Date().toISOString(); task.data.status = 'In Progress'; task.data.started_at = now; task.data.started_by = actor; task.updated_at = now; store.updateRow(task);
   audit(tenant, actor, 'laundry:production-task-started', { entity: task.entity, row_id: id, after: { assignedTo: task.data.assigned_to || '', startedAt: now } });
-  return presentTask(tenant, task);
+  return presentTaskFromRow(tenant, task);
 }
 
 export function productionStateCreatesTask(state: string) { return !terminalStates.has(state) && Boolean(stationForState[state]); }

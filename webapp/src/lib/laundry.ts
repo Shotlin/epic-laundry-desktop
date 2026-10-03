@@ -61,6 +61,7 @@ export type LaundryCatalogue = {
     name: string;
     type: "Flat" | "Percentage";
     amount: number;
+    expressCharge?: boolean;
     description?: string;
     active?: boolean;
   }>;
@@ -74,6 +75,7 @@ export type LaundryCatalogue = {
   }>;
   taxRules: Array<{ id: string; name: string; rate: number; active?: boolean }>;
   serviceUnits: string[];
+  serviceUnitRecords?: Array<{ id: string; value: string; fullName: string; shortName: string; active: boolean; builtIn: boolean; usageCount: number }>;
 };
 
 export type LaundryOrder = {
@@ -100,6 +102,7 @@ export type LaundryOrder = {
   paymentMode: string;
   paymentStatus: string;
   source: string;
+  reportedBy?: string;
   pickupRider?: { id: string; name: string; phone: string };
   deliveryRider?: { id: string; name: string; phone: string };
   pickupSlot: string;
@@ -113,6 +116,9 @@ export type LaundryOrder = {
     qty: number;
     rate: number;
     amount: number;
+    color?: string;
+    garmentType?: string;
+    rateOverride?: number;
     fulfilment?: {
       ordered: number;
       received: number;
@@ -151,6 +157,7 @@ export type LaundryOrder = {
     sequence: number;
     total: number;
     weightKg?: number;
+    orderWeightKg?: number;
     state: string;
     location: string;
     condition: string;

@@ -5,10 +5,10 @@ import { Worker } from 'node:worker_threads';
 import { audit } from '../../kernel/audit.js';
 import { createRow } from '../../kernel/entity-service.js';
 import { store } from '../../kernel/store.js';
-import { laundryReportDetail, laundryReportDetailStream, type LaundryReportKind } from './domain.js';
+import { isLaundryReportLocked, laundryReportDetail, laundryReportDetailStream, type LaundryReportKind } from './domain.js';
 
 type ExportStatus = 'Queued' | 'Running' | 'Completed' | 'Failed' | 'Expired';
-type ExportInput = { kind?: string; from?: string; to?: string; search?: string };
+type ExportInput = { kind?: string; from?: string; to?: string; search?: string; paymentMethod?: string; view?: 'invoice' | 'customer' | 'service' };
 const reportKinds: LaundryReportKind[] = ['invoice', 'collection', 'order', 'consolidated-invoices', 'customer', 'customer-package', 'customer-list', 'growth', 'discount', 'expense', 'balance', 'pickup', 'rider-delivery', 'rider-collection', 'warehouse-user-work'];
 const clean = (value: unknown, max: number) => String(value || '').trim().slice(0, max);
 const validDate = (value: string) => !value || /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -16,7 +16,9 @@ const exportDirectory = () => { const configured = clean(process.env.EPIC_REPORT
 const fileNameFor = (id: string) => `laundry-report-${id}.csv`;
 
 function present(row: ReturnType<typeof store.rowsOf>[number]) {
-  return { id: row.id, kind: clean(row.data.report_kind, 60), from: clean(row.data.from_date, 20) || null, to: clean(row.data.to_date, 20) || null, search: clean(row.data.search, 120), status: clean(row.data.status, 20) as ExportStatus, executor: clean(row.data.executor, 40) || null, requestedBy: clean(row.data.requested_by, 160), requestedAt: clean(row.data.requested_at, 40), startedAt: clean(row.data.started_at, 40) || null, completedAt: clean(row.data.completed_at, 40) || null, totalRows: Number(row.data.total_rows || 0), fileName: clean(row.data.file_name, 160) || null, error: clean(row.data.error, 500) || null, expiresAt: clean(row.data.expires_at, 40) || null };
+  const kind = clean(row.data.report_kind, 60);
+  const view = kind === 'collection' ? clean(row.data.collection_view, 20) === 'customer' ? 'customer' : 'invoice' : kind === 'order' ? clean(row.data.order_view, 20) === 'invoice' ? 'invoice' : 'service' : kind === 'balance' ? clean(row.data.balance_view, 20) === 'customer' ? 'customer' : 'invoice' : 'invoice';
+  return { id: row.id, kind, view, from: clean(row.data.from_date, 20) || null, to: clean(row.data.to_date, 20) || null, search: clean(row.data.search, 120), paymentMethod: clean(row.data.payment_method, 40) || null, status: clean(row.data.status, 20) as ExportStatus, executor: clean(row.data.executor, 40) || null, requestedBy: clean(row.data.requested_by, 160), requestedAt: clean(row.data.requested_at, 40), startedAt: clean(row.data.started_at, 40) || null, completedAt: clean(row.data.completed_at, 40) || null, totalRows: Number(row.data.total_rows || 0), fileName: clean(row.data.file_name, 160) || null, error: clean(row.data.error, 500) || null, expiresAt: clean(row.data.expires_at, 40) || null };
 }
 
 function csvCell(value: unknown) {
@@ -59,9 +61,10 @@ function runExport(tenant: string, storeId: string, id: string) {
     if (!running) return;
     try {
       const job = store.getRow(tenant, id); if (!job) throw new Error('export job not found');
-      const from = clean(job.data.from_date, 20) || undefined; const to = clean(job.data.to_date, 20) || undefined; const search = clean(job.data.search, 120) || undefined;
+      if (isLaundryReportLocked(String(job.data.report_kind || ''))) throw new Error('Warehouse User Work Report is locked. Contact Us for activation.');
+      const from = clean(job.data.from_date, 20) || undefined; const to = clean(job.data.to_date, 20) || undefined; const search = clean(job.data.search, 120) || undefined; const paymentMethod = clean(job.data.payment_method, 40) || undefined; const view = clean(job.data.collection_view, 20) === 'customer' ? 'customer' : 'invoice'; const orderView = clean(job.data.order_view, 20) === 'invoice' ? 'invoice' : 'service'; const balanceView = clean(job.data.balance_view, 20) === 'customer' ? 'customer' : 'invoice';
       const stream = laundryReportDetailStream(tenant, job.data.report_kind as LaundryReportKind, from, to, search);
-      const result = stream ? { columns: stream.columns, rows: stream.rows, totalRows: undefined } : laundryReportDetail(tenant, job.data.report_kind as LaundryReportKind, from, to, search, 1, 500, undefined, true);
+      const result = stream ? { columns: stream.columns, rows: stream.rows, totalRows: undefined } : laundryReportDetail(tenant, job.data.report_kind as LaundryReportKind, from, to, search, paymentMethod, 1, 500, undefined, true, view, orderView, balanceView);
       const fileName = fileNameFor(id); const directory = exportDirectory(); mkdirSync(directory, { recursive: true }); const writtenRows = writeCsvFile(join(directory, fileName), result.columns, result.rows);
       const totalRows = stream ? writtenRows : result.totalRows;
       update(tenant, id, (row) => { row.data.status = 'Completed'; row.data.completed_at = new Date().toISOString(); row.data.total_rows = totalRows; row.data.file_name = fileName; row.data.expires_at = new Date(Date.now() + 7 * 86400000).toISOString(); row.data.executor = stream ? 'worker_thread_cursor' : 'worker_thread'; row.data.error = ''; });
@@ -101,9 +104,13 @@ export function runExportInWorker(tenant: string, storeId: string, id: string) {
 
 export function createLaundryReportExportJob(tenant: string, actor: string, input: ExportInput) {
   const kind = clean(input.kind, 60) as LaundryReportKind; if (!reportKinds.includes(kind)) throw new Error('unknown laundry report');
+  if (isLaundryReportLocked(kind)) throw new Error('Warehouse User Work Report is locked. Contact Us for activation.');
   const from = clean(input.from, 20); const to = clean(input.to, 20); if (!validDate(from) || !validDate(to)) throw new Error('report dates must be YYYY-MM-DD'); if (from && to && from > to) throw new Error('report from date must not be after to date');
-  const row = createRow(tenant, actor, 'laundry_report_export_job', { report_kind: kind, from_date: from, to_date: to, search: clean(input.search, 120), status: 'Queued', executor: '', requested_by: actor, requested_at: new Date().toISOString(), total_rows: 0, file_name: '', error: '', expires_at: '' });
-  const storeId = store.currentStore(tenant); audit(tenant, actor, 'laundry:report-export-queued', { entity: row.entity, row_id: row.id, after: { kind, from: from || null, to: to || null } });
+  const view = kind === 'collection' && input.view === 'customer' ? 'customer' : 'invoice';
+  const orderView = kind === 'order' && input.view === 'invoice' ? 'invoice' : 'service';
+  const balanceView = kind === 'balance' && input.view === 'customer' ? 'customer' : 'invoice';
+  const row = createRow(tenant, actor, 'laundry_report_export_job', { report_kind: kind, collection_view: view, order_view: orderView, balance_view: balanceView, from_date: from, to_date: to, search: clean(input.search, 120), payment_method: clean(input.paymentMethod, 40), status: 'Queued', executor: '', requested_by: actor, requested_at: new Date().toISOString(), total_rows: 0, file_name: '', error: '', expires_at: '' });
+  const storeId = store.currentStore(tenant); audit(tenant, actor, 'laundry:report-export-queued', { entity: row.entity, row_id: row.id, after: { kind, view: kind === 'balance' ? balanceView : kind === 'order' ? orderView : view, from: from || null, to: to || null } });
   setImmediate(() => launchWorker(tenant, storeId, row.id));
   return present(row);
 }
@@ -115,7 +122,7 @@ export function getLaundryReportExportJob(tenant: string, id: string) {
 }
 
 export function readLaundryReportExport(tenant: string, id: string) {
-  const job = getLaundryReportExportJob(tenant, id); if (job.status !== 'Completed' || !job.fileName) throw new Error(job.status === 'Expired' ? 'report export has expired' : 'report export is not ready');
+  const job = getLaundryReportExportJob(tenant, id); if (isLaundryReportLocked(job.kind)) throw new Error('Warehouse User Work Report is locked. Contact Us for activation.'); if (job.status !== 'Completed' || !job.fileName) throw new Error(job.status === 'Expired' ? 'report export has expired' : 'report export is not ready');
   if (!/^[A-Za-z0-9._-]+\.csv$/.test(job.fileName)) throw new Error('invalid report export file');
   try { return { job, csv: readFileSync(join(exportDirectory(), job.fileName), 'utf8') }; } catch { update(tenant, id, (row) => { row.data.status = 'Failed'; row.data.error = 'report export file is unavailable'; }); throw new Error('report export file is unavailable'); }
 }

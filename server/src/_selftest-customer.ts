@@ -50,7 +50,10 @@ try {
   assert.equal(rewardOverdraw.statusCode, 400, 'reward redemption cannot exceed balance');
   profile = await app.inject({ method: 'GET', url: `/api/laundry/customers/${customerId}`, headers });
   assert.equal(profile.json().metrics.walletBalance, 50, 'wallet balance reconciles from append-only entries');
+  assert.equal(profile.json().metrics.orderBalance, 125, 'standalone wallet movements do not change the order receivable');
   assert.equal(profile.json().wallet.length, 2, 'idempotent retry does not post a second wallet movement');
+  assert.equal(profile.json().timeline.filter((entry: any) => entry.label === 'Wallet Credit').length, 1, 'a standalone wallet credit appears once in customer activity');
+  assert.equal(profile.json().timeline.filter((entry: any) => entry.label === 'Wallet Debit').length, 1, 'a standalone wallet debit appears once in customer activity');
   const normalizedWallet = store.withStoreScope('CUSTOMER', 'STORE-C', () => store.listWalletEntries('CUSTOMER', customerId));
   assert.equal(normalizedWallet.length, 2, 'wallet movements are persisted in normalized store-scoped rows');
   assert.equal(normalizedWallet.reduce((sum, entry) => sum + (entry.entryType === 'Debit' ? -entry.amountPaise : entry.amountPaise), 0), 5000, 'normalized wallet balance is exact integer paise');

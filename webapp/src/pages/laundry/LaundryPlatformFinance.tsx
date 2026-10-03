@@ -4,7 +4,8 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { apiGet, operatorErrorMessage } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { canUseUi } from '@/components/laundry/LaundryShell'
+import { canUseUi } from '@/lib/permissions'
+import PlatformConnectionState from '@/components/laundry/PlatformConnectionState'
 import VisualEmptyState from '@/components/laundry/VisualEmptyState'
 import VisualLoadingState from '@/components/laundry/VisualLoadingState'
 
@@ -31,8 +32,8 @@ export default function LaundryPlatformFinance() {
   const transactions = useQuery({ queryKey: ['platform-finance-transactions', selected], queryFn: () => apiGet<Transaction[]>(`/platform/finance/vendors/${encodeURIComponent(selected!)}/transactions?page=1&limit=20`), enabled: Boolean(selected) && canAccess && Boolean(connection.data?.connected), staleTime: 10_000 })
 
   if (session.isLoading || connection.isLoading) return <VisualLoadingState title="Preparing platform finance" detail="Checking the local permission and platform-admin connection." icon={Landmark} />
-  if (!canAccess) return <VisualEmptyState kind="orders" title="Not available" detail="Platform finance oversight is limited to store owners on this installation." />
-  if (!connection.data?.connected) return <VisualEmptyState kind="orders" title="Connect a platform-admin account first" detail="Vendor settlement evidence remains in the cloud. Connect the separate administrator identity before reviewing it." action={<Link to="/laundry/platform-control" className="inline-flex items-center gap-2 rounded-xl bg-[#193d48] px-3 py-2 text-xs font-bold text-white"><ShieldCheck className="h-3.5 w-3.5" />Open Platform Control</Link>} />
+  if (!canAccess) return <PlatformConnectionState pageTitle="Platform finance" pageDescription="Read-only vendor settlement and ledger evidence from the platform." stateTitle="Not available" stateDetail="Platform finance oversight is limited to store owners on this installation." />
+  if (!connection.data?.connected) return <PlatformConnectionState pageTitle="Platform finance" pageDescription="Read-only vendor settlement and ledger evidence from the platform." stateTitle="Connect a platform-admin account first" stateDetail="Vendor settlement evidence remains in the cloud. Connect the separate administrator identity before reviewing it." action={<Link to="/laundry/platform-control" className="inline-flex items-center gap-2 rounded-xl bg-[#193d48] px-3 py-2 text-xs font-bold text-white"><ShieldCheck className="h-3.5 w-3.5" />Open Platform Control</Link>} />
 
   const periods = financials.data || []
   const held = periods.filter((period) => period.payout_status === 'HELD').length

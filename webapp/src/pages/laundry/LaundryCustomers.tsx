@@ -17,10 +17,12 @@ import {
   UserRound,
   WalletCards,
 } from "lucide-react";
-import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { apiGet, apiPatch, apiPost, apiPostOffline } from "@/lib/api";
-import { formatINR } from "@/lib/utils";
+import { formatINR, formatMoney } from "@/lib/utils";
 import VisualEmptyState from "@/components/laundry/VisualEmptyState";
+import { isWebOnly, sessionFromStoredCloud } from "@/lib/cloudAuth";
+import { canUseUi } from "@/lib/permissions";
 
 type Customer = {
   id: string;
@@ -121,11 +123,11 @@ type Profile = {
   metrics: {
     revenue: number;
     orderBalance: number;
-    walletBalance: number;
-    rewardPoints: number;
+    walletBalance?: number;
+    rewardPoints?: number;
     lastVisit: string | null;
-    currentPackage: string | null;
-    orderStatus: Record<string, number>;
+    currentPackage?: string | null;
+    orderStatus?: Record<string, number>;
   };
   addresses: Address[];
   orders: Array<{
@@ -229,17 +231,19 @@ const blank: NewCustomer = {
 
 export default function LaundryCustomers() {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
+  if (!id && searchParams.get("new") === "1") return <CustomerDirectory startNew />;
+  if (id) return <CustomerWorkCard id={id} />;
   const query = new URLSearchParams({ view: "customers" });
-  if (id) query.set("customer", id);
   return <Navigate to={`/laundry/orders?${query.toString()}`} replace />;
 }
 
-function CustomerDirectory() {
+function CustomerDirectory({ startNew = false }: { startNew?: boolean }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const deferred = useDeferredValue(search);
-  const [showNew, setShowNew] = useState(false);
+  const [showNew, setShowNew] = useState(startNew);
   const [draft, setDraft] = useState<NewCustomer>(blank);
   const customers = useQuery({
     queryKey: ["laundry-customers", deferred],
@@ -306,6 +310,7 @@ function CustomerDirectory() {
           pending={create.isPending}
           submitText="Create customer account"
           includeOpening
+          cancel={() => { setShowNew(false); setDraft(blank); navigate("/laundry/customers"); }}
         />
       ) : null}
       <div className="relative mt-6 max-w-2xl">
@@ -375,8 +380,10 @@ function CustomerWorkCard({ id }: { id: string }) {
   const [mode, setMode] = useState<"activity" | "ledger" | "wallet">(
     "activity",
   );
-  const [amount, setAmount] = useState("");
-  const [reason, setReason] = useState("");
+  const [walletAmount, setWalletAmount] = useState("");
+  const [walletReason, setWalletReason] = useState("");
+  const [rewardPoints, setRewardPoints] = useState("");
+  const [rewardReason, setRewardReason] = useState("");
   const [editing, setEditing] = useState<Customer | null>(null);
   const [addressEditor, setAddressEditor] = useState<AddressDraft | null>(null);
   const profile = useQuery({
@@ -386,9 +393,16 @@ function CustomerWorkCard({ id }: { id: string }) {
   const session = useQuery({
     queryKey: ["auth-session"],
     queryFn: () =>
-      apiGet<{ user: { roles: string[] } | null }>("/auth/session"),
+      isWebOnly
+        ? Promise.resolve(sessionFromStoredCloud())
+        : apiGet<{ user: { roles: string[] } | null }>("/auth/session"),
   });
-  const owner = Boolean(session.data?.user?.roles.includes("owner"));
+  const roles = session.data?.user?.roles;
+  const canEditCustomer = !isWebOnly && canUseUi(roles, "customers.edit");
+  const canManageMarketplace = !isWebOnly && canUseUi(roles, "settings.manage");
+  const canManagePrivacy = !isWebOnly && canUseUi(roles, "settings.manage");
+  const canManageWallet = !isWebOnly && canUseUi(roles, "wallet.manage");
+  const canManageRewards = !isWebOnly && canUseUi(roles, "rewards.manage");
   const update = useMutation({
     mutationFn: (customer: Customer) =>
       apiPatch<Customer>(`/laundry/customers/${id}`, customer),
@@ -402,24 +416,24 @@ function CustomerWorkCard({ id }: { id: string }) {
     mutationFn: (type: "Credit" | "Debit") =>
       apiPost(`/laundry/customers/${id}/wallet`, {
         type,
-        amount: Number(amount),
-        reason,
+        amount: Number(walletAmount),
+        reason: walletReason,
       }),
     onSuccess: () => {
-      setAmount("");
-      setReason("");
+      setWalletAmount("");
+      setWalletReason("");
       queryClient.invalidateQueries({ queryKey: ["customer-profile", id] });
     },
   });
   const reward = useMutation({
     mutationFn: () =>
       apiPost(`/laundry/customers/${id}/rewards`, {
-        points: Number(amount),
-        reason,
+        points: Number(rewardPoints),
+        reason: rewardReason,
       }),
     onSuccess: () => {
-      setAmount("");
-      setReason("");
+      setRewardPoints("");
+      setRewardReason("");
       queryClient.invalidateQueries({ queryKey: ["customer-profile", id] });
     },
   });
@@ -470,7 +484,7 @@ function CustomerWorkCard({ id }: { id: string }) {
       apiGet<PrivacyRequest[]>(
         `/laundry/privacy-requests?customerId=${encodeURIComponent(id)}`,
       ),
-    enabled: owner,
+    enabled: canManagePrivacy,
   });
   const privacyExport = useMutation({
     mutationFn: () =>
@@ -517,7 +531,29 @@ function CustomerWorkCard({ id }: { id: string }) {
   if (profile.isError || !profile.data)
     return (
       <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-800">
-        This customer record could not be loaded.
+        <p className="font-semibold">
+          {(profile.error as Error & { status?: number })?.status === 403
+            ? "Your role cannot open this customer profile."
+            : (profile.error as Error & { status?: number })?.status === 404
+              ? "This customer record could not be found in the current store."
+              : "This customer record could not be loaded."}
+        </p>
+        {(profile.error as Error & { status?: number })?.status !== 403 &&
+        (profile.error as Error & { status?: number })?.status !== 404 ? (
+          <button
+            type="button"
+            onClick={() => profile.refetch()}
+            className="mt-3 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-rose-800 ring-1 ring-rose-300"
+          >
+            Retry
+          </button>
+        ) : null}
+        <Link
+          to="/laundry/orders?view=customers"
+          className="ml-3 inline-block text-sm font-semibold underline"
+        >
+          Back to customers
+        </Link>
       </div>
     );
   const data = profile.data;
@@ -547,6 +583,12 @@ function CustomerWorkCard({ id }: { id: string }) {
           }));
   return (
     <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
+      {isWebOnly ? (
+        <p className="rounded-xl border border-[#d8c08a] bg-[#fffaf0] px-4 py-3 text-sm leading-5 text-[#6f6248]">
+          This profile is read-only in the connected workspace. Some Epic
+          customer details and account tools are not provided by this connection.
+        </p>
+      ) : null}
       <button
         onClick={() => navigate("/laundry/customers")}
         className="inline-flex items-center gap-2 text-sm font-semibold text-[#39786f]"
@@ -610,50 +652,53 @@ function CustomerWorkCard({ id }: { id: string }) {
                 ? `Last visit ${data.metrics.lastVisit}`
                 : "No orders yet"}
             </span>
-            <button
-              onClick={() => setEditing(data.customer)}
-              className="inline-flex items-center gap-1 rounded-lg border border-white/15 px-3 py-1.5 text-xs font-bold text-white hover:bg-white/10"
-            >
-              <Pencil className="h-3.5 w-3.5" />
-              Edit
-            </button>
+            {canEditCustomer ? (
+              <button
+                type="button"
+                onClick={() => setEditing(data.customer)}
+                className="inline-flex items-center gap-1 rounded-lg border border-white/15 px-3 py-1.5 text-xs font-bold text-white hover:bg-white/10"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                Edit
+              </button>
+            ) : null}
           </div>
         </div>
       </header>
       <section className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <Metric
           label="Revenue"
-          value={formatINR(data.metrics.revenue)}
+          value={formatMoney(data.metrics.revenue)}
           accent="text-[#39786f]"
         />
         <Metric
           label="Order balance"
-          value={formatINR(data.metrics.orderBalance)}
+          value={formatMoney(data.metrics.orderBalance)}
           accent={
             data.metrics.orderBalance > 0 ? "text-[#b15e3c]" : "text-[#39786f]"
           }
         />
         <Metric
           label="Wallet balance"
-          value={formatINR(data.metrics.walletBalance)}
+          value={data.metrics.walletBalance === undefined ? "Not synced" : formatMoney(data.metrics.walletBalance)}
           accent="text-[#3a7894]"
         />
         <Metric
           label="Reward points"
-          value={String(data.metrics.rewardPoints)}
+          value={data.metrics.rewardPoints === undefined ? "Not synced" : String(data.metrics.rewardPoints)}
           accent="text-[#a97420]"
         />
         <Metric
           label="Active care"
-          value={data.metrics.currentPackage || "None"}
+          value={data.metrics.currentPackage === undefined ? "Not synced" : data.metrics.currentPackage || "None"}
           accent="text-[#7555a3]"
         />
       </section>
-      <CustomerOrderJourney statuses={data.metrics.orderStatus} />
+      {data.metrics.orderStatus ? <CustomerOrderJourney statuses={data.metrics.orderStatus} /> : null}
       <div className="mt-6 grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_330px]">
         <section className="rounded-[22px] border border-[#263f44]/10 bg-white shadow-[0_8px_28px_rgba(37,48,43,.04)]">
           <div className="flex flex-wrap gap-2 border-b border-[#263f44]/10 p-4">
-            {(["activity", "ledger", "wallet"] as const).map((tab) => (
+            {(isWebOnly ? (["activity"] as const) : (["activity", "ledger", "wallet"] as const)).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setMode(tab)}
@@ -684,7 +729,7 @@ function CustomerWorkCard({ id }: { id: string }) {
                   className={`font-semibold tabular-nums ${entry.amount < 0 ? "text-[#a95440]" : "text-[#39786f]"}`}
                 >
                   {entry.amount < 0 ? "−" : "+"}
-                  {formatINR(Math.abs(entry.amount))}
+                  {formatMoney(Math.abs(entry.amount))}
                 </span>
               </div>
             ))}
@@ -710,7 +755,7 @@ function CustomerWorkCard({ id }: { id: string }) {
                   Order history
                 </h2>
               </div>
-              <button
+              {canEditCustomer ? <button
                 type="button"
                 onClick={() =>
                   setAddressEditor({
@@ -727,7 +772,7 @@ function CustomerWorkCard({ id }: { id: string }) {
                 className="rounded-lg bg-[#eaf3ef] px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-[.1em] text-[#2e6a60]"
               >
                 Add address
-              </button>
+              </button> : null}
             </div>
             <div className="mt-4 space-y-3">
               {data.orders.map((order) => (
@@ -741,7 +786,7 @@ function CustomerWorkCard({ id }: { id: string }) {
                       {order.orderNumber}
                     </span>
                     <span className="font-bold">
-                      {formatINR(order.grandTotal)}
+                      {formatMoney(order.grandTotal)}
                     </span>
                   </div>
                   <p className="mt-1 text-xs text-[#718087]">
@@ -773,7 +818,11 @@ function CustomerWorkCard({ id }: { id: string }) {
                 {data.addresses.filter((address) => address.active).length}
               </span>
             </div>
-            <div className="mt-4 space-y-2">
+            {isWebOnly ? (
+              <p className="mt-4 rounded-lg bg-[#f8faf7] p-3 text-xs leading-5 text-[#617178]">
+                Saved address details are not included in this connected profile feed.
+              </p>
+            ) : <div className="mt-4 space-y-2">
               {data.addresses
                 .filter((address) => address.active)
                 .map((address) => (
@@ -804,6 +853,7 @@ function CustomerWorkCard({ id }: { id: string }) {
                         </p>
                       </div>
                       <div className="flex shrink-0 gap-1">
+                        {canEditCustomer ? <>
                         <button
                           type="button"
                           onClick={() => setAddressEditor(address)}
@@ -813,12 +863,17 @@ function CustomerWorkCard({ id }: { id: string }) {
                         </button>
                         <button
                           type="button"
-                          onClick={() => archiveAddress.mutate(address.id)}
+                          onClick={() => {
+                            if (window.confirm("Archive this saved address? Existing orders and financial history will not change.")) {
+                              archiveAddress.mutate(address.id);
+                            }
+                          }}
                           disabled={archiveAddress.isPending}
                           className="rounded-lg px-2 py-1 text-[10px] font-bold text-rose-700 hover:bg-rose-50"
                         >
                           Archive
                         </button>
+                        </> : null}
                       </div>
                     </div>
                   </div>
@@ -833,8 +888,8 @@ function CustomerWorkCard({ id }: { id: string }) {
                   />
                 </div>
               ) : null}
-            </div>
-            {addressEditor ? (
+            </div>}
+            {addressEditor && canEditCustomer ? (
               <AddressEditor
                 initial={addressEditor}
                 pending={saveAddress.isPending}
@@ -844,9 +899,9 @@ function CustomerWorkCard({ id }: { id: string }) {
               />
             ) : null}
           </section>
-          <MarketplaceIdentityPanel
+          {!isWebOnly ? <MarketplaceIdentityPanel
             data={data.marketplace}
-            owner={owner}
+            owner={canManageMarketplace}
             externalCustomerId={externalCustomerId}
             setExternalCustomerId={setExternalCustomerId}
             externalChannel={externalChannel}
@@ -863,8 +918,8 @@ function CustomerWorkCard({ id }: { id: string }) {
               error: revokeMarketplaceCustomer.error,
             }}
             onRevoke={(linkId) => revokeMarketplaceCustomer.mutate(linkId)}
-          />
-          <section className="rounded-[22px] border border-[#263f44]/10 bg-[#f5faf7] p-5">
+          /> : null}
+          {!isWebOnly ? <section className="rounded-[22px] border border-[#263f44]/10 bg-[#f5faf7] p-5">
             <div className="flex items-center gap-2">
               <UserRound className="h-5 w-5 text-[#39786f]" />
               <div>
@@ -898,8 +953,8 @@ function CustomerWorkCard({ id }: { id: string }) {
                 </dd>
               </div>
             </dl>
-          </section>
-          {owner ? (
+          </section> : null}
+          {canManagePrivacy ? (
             <>
               <PrivacyControls
                 customerId={id}
@@ -912,59 +967,45 @@ function CustomerWorkCard({ id }: { id: string }) {
               />
             </>
           ) : null}
-          {owner ? (
+          {canManageWallet || canManageRewards ? (
             <section className="rounded-[22px] bg-[#eaf3ef] p-5">
               <div className="flex items-center gap-2">
                 <WalletCards className="h-5 w-5 text-[#39786f]" />
                 <h2 className="font-serif text-xl text-[#17353c]">
-                  Owner adjustments
+                  Account adjustments
                 </h2>
               </div>
               <p className="mt-1 text-xs leading-5 text-[#617178]">
-                Manual reward actions are an Epic extension because the
-                reference earning formula was not observed.
+                Each change is recorded with the reason you enter. Check the amount or points before saving.
               </p>
-              <input
-                value={amount}
-                onChange={(event) => setAmount(event.target.value)}
-                type="number"
-                step="0.01"
-                placeholder="Amount / points"
-                className="mt-4 h-10 w-full rounded-xl border border-[#17363e]/15 bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#3a7d78]"
-              />
-              <input
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-                placeholder="Required reason"
-                className="mt-2 h-10 w-full rounded-xl border border-[#17363e]/15 bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-[#3a7d78]"
-              />
-              {wallet.isError || reward.isError ? (
-                <ErrorText error={wallet.error || reward.error} />
-              ) : null}
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <button
-                  disabled={!amount || !reason || wallet.isPending}
-                  onClick={() => wallet.mutate("Credit")}
-                  className="rounded-lg bg-[#39786f] px-2 py-2 text-xs font-bold text-white disabled:opacity-50"
-                >
-                  Credit wallet
+              {canManageWallet ? <div className="mt-4 rounded-xl border border-[#39786f]/15 bg-white p-3">
+                <h3 className="text-sm font-bold text-[#27454c]">Wallet adjustment</h3>
+                <label className="mt-3 block text-xs font-semibold text-[#617178]">Amount (₹)
+                  <input aria-label="Wallet amount in rupees" value={walletAmount} onChange={(event) => setWalletAmount(event.target.value)} type="number" min="0.01" step="0.01" className="mt-1 h-10 w-full rounded-lg border border-[#17363e]/15 px-3 text-sm font-normal text-[#31484d] outline-none focus:ring-2 focus:ring-[#3a7d78]" />
+                </label>
+                <label className="mt-2 block text-xs font-semibold text-[#617178]">Reason
+                  <input aria-label="Wallet adjustment reason" value={walletReason} onChange={(event) => setWalletReason(event.target.value)} maxLength={500} className="mt-1 h-10 w-full rounded-lg border border-[#17363e]/15 px-3 text-sm font-normal text-[#31484d] outline-none focus:ring-2 focus:ring-[#3a7d78]" />
+                </label>
+                {wallet.isError ? <ErrorText error={wallet.error} /> : null}
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button type="button" disabled={!Number.isFinite(Number(walletAmount)) || Number(walletAmount) <= 0 || !walletReason.trim() || wallet.isPending} onClick={() => wallet.mutate("Credit")} className="rounded-lg bg-[#39786f] px-2 py-2 text-xs font-bold text-white disabled:opacity-50">Credit wallet</button>
+                  <button type="button" disabled={!Number.isFinite(Number(walletAmount)) || Number(walletAmount) <= 0 || !walletReason.trim() || Number(walletAmount) > (data.metrics.walletBalance || 0) || wallet.isPending} onClick={() => wallet.mutate("Debit")} className="rounded-lg border border-[#39786f]/30 px-2 py-2 text-xs font-bold text-[#39786f] disabled:opacity-50">Debit wallet</button>
+                </div>
+                {Number(walletAmount) > (data.metrics.walletBalance || 0) ? <p className="mt-2 text-xs text-amber-800">The debit amount is higher than the available wallet balance.</p> : null}
+              </div> : null}
+              {canManageRewards ? <div className="mt-3 rounded-xl border border-[#39786f]/15 bg-white p-3">
+                <h3 className="text-sm font-bold text-[#27454c]">Reward points adjustment</h3>
+                <label className="mt-3 block text-xs font-semibold text-[#617178]">Points (use a negative number to remove points)
+                  <input aria-label="Reward points adjustment" value={rewardPoints} onChange={(event) => setRewardPoints(event.target.value)} type="number" step="1" className="mt-1 h-10 w-full rounded-lg border border-[#17363e]/15 px-3 text-sm font-normal text-[#31484d] outline-none focus:ring-2 focus:ring-[#3a7d78]" />
+                </label>
+                <label className="mt-2 block text-xs font-semibold text-[#617178]">Reason
+                  <input aria-label="Reward adjustment reason" value={rewardReason} onChange={(event) => setRewardReason(event.target.value)} maxLength={500} className="mt-1 h-10 w-full rounded-lg border border-[#17363e]/15 px-3 text-sm font-normal text-[#31484d] outline-none focus:ring-2 focus:ring-[#3a7d78]" />
+                </label>
+                {reward.isError ? <ErrorText error={reward.error} /> : null}
+                <button type="button" disabled={!Number.isInteger(Number(rewardPoints)) || Number(rewardPoints) === 0 || !rewardReason.trim() || reward.isPending} onClick={() => reward.mutate()} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#d9a549] px-2 py-2 text-xs font-bold text-[#17353c] disabled:opacity-50">
+                  <Gift className="h-3.5 w-3.5" /> Save reward adjustment
                 </button>
-                <button
-                  disabled={!amount || !reason || wallet.isPending}
-                  onClick={() => wallet.mutate("Debit")}
-                  className="rounded-lg border border-[#39786f]/30 px-2 py-2 text-xs font-bold text-[#39786f] disabled:opacity-50"
-                >
-                  Debit wallet
-                </button>
-                <button
-                  disabled={!amount || !reason || reward.isPending}
-                  onClick={() => reward.mutate()}
-                  className="col-span-2 inline-flex items-center justify-center gap-2 rounded-lg bg-[#d9a549] px-2 py-2 text-xs font-bold text-[#17353c] disabled:opacity-50"
-                >
-                  <Gift className="h-3.5 w-3.5" />
-                  Adjust rewards
-                </button>
-              </div>
+              </div> : null}
             </section>
           ) : null}
         </aside>

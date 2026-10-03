@@ -15,6 +15,7 @@ import {
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { apiGet, apiPost, operatorErrorMessage } from "@/lib/api";
+import { invalidateProductionViews } from "@/lib/productionQueries";
 import { withTagFormatOverride } from "@/lib/tagFormats";
 import {
   deliverPrintDocument,
@@ -76,6 +77,7 @@ type ContainerDetail = {
   sequence: number;
   total: number;
   weightKg?: number;
+  orderWeightKg?: number;
   state: string;
   location: string;
   condition: string;
@@ -172,13 +174,17 @@ export default function LaundryGarmentTracking() {
         location: location || undefined,
         note: note || undefined,
       }),
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       setSelected(data);
       setTagCode(data.tagCode);
       setNextState("");
       setNotice("Scan recorded in the garment audit trail.");
       setScanFeedback(data.scanResult === "already_at_stage" ? "warning" : "success");
-      client.invalidateQueries({ queryKey: ["garment-units"] });
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["garment-units"] }),
+        client.invalidateQueries({ queryKey: ["rack-occupancy"] }),
+        invalidateProductionViews(client),
+      ]);
     },
     onError: () => setScanFeedback("error"),
   });
@@ -630,12 +636,12 @@ function ContainerDetailPanel({ container }: { container: ContainerDetail }) {
             value={`${container.sequence} / ${container.total}`}
           />
           <MetricDark
-            label="Weight"
-            value={
-              container.weightKg === undefined
-                ? "Bulk container"
-                : `${container.weightKg} kg`
-            }
+            label="Order total weight"
+            value={container.orderWeightKg === undefined ? "Not recorded" : `${container.orderWeightKg} kg`}
+          />
+          <MetricDark
+            label="Individual bag weight"
+            value={container.weightKg === undefined ? "Not recorded" : `${container.weightKg} kg`}
           />
           <MetricDark label="Location" value={container.location} />
           <MetricDark label="Condition" value={container.condition} />

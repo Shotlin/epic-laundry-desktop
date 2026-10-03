@@ -29,6 +29,13 @@ const UNRESTRICTED: VendorAccess = { vendorType: null, appSync: true, walletAcce
  */
 export function useVendorAccess(): VendorAccess {
   const queryClient = useQueryClient()
+  const workspace = useQuery({
+    queryKey: ['workspace-mode'],
+    queryFn: () => window.epic?.workspaceStatus?.() || apiGet<{ mode: 'production' | 'demo' }>('/workspace/status'),
+    enabled: !isWebOnly,
+    staleTime: 60_000,
+    retry: false,
+  })
   const query = useQuery({
     queryKey: ['vendor-access'],
     queryFn: () => apiGet<{ vendorType: VendorType; appSync: boolean; walletAccess: boolean }>('/vendor/counter/access'),
@@ -46,7 +53,10 @@ export function useVendorAccess(): VendorAccess {
     void queryClient.invalidateQueries({ queryKey: ['wallet-balance'] })
     void queryClient.invalidateQueries({ queryKey: ['laundry-customers-remote'] })
   }, [kind, queryClient])
-  if (!isWebOnly) return UNRESTRICTED
+  // Local integrations are available in the installed production workspace.
+  // Demo data has no linked LNDRY vendor, so fail closed instead of issuing
+  // wallet/remote-customer requests that can only return CLOUD_NOT_CONNECTED.
+  if (!isWebOnly) return workspace.data?.mode === 'production' ? UNRESTRICTED : NOT_CONNECTED
   if (!query.data) return NOT_CONNECTED
   return { vendorType: query.data.vendorType, appSync: Boolean(query.data.appSync), walletAccess: Boolean(query.data.walletAccess), loaded: true }
 }

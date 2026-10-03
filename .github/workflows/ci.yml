@@ -11,7 +11,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -48,8 +48,8 @@ jobs:
       - name: Run full server regression and V3 tagging gates
         run: >-
           npm run test:laundry && npm run test:auth && npm run test:store-migration && npm run test:clean-db-bootstrap &&
-          npm run test:customer && npm run test:package && npm run test:catalogue &&
-          npm run test:invoice-snapshot &&
+          npm run test:customer && npm run test:package && npm run test:catalogue && npm run test:management &&
+          npm run test:invoice-snapshot && npm run test:booking-discount &&
           npm run test:payment && npm run test:ops && npm run test:restart &&
           npm run test:recovery-drill && npm run test:workspace-mode &&
           npm run test:startup-handshake && npm run test:garment-traceability &&
@@ -61,6 +61,10 @@ jobs:
           npm run test:marketplace-sync && npm run test:marketplace-cross-channel &&
           npm run test:marketplace-api && npm run test:marketplace-device-api &&
           npm run test:marketplace-catalogue && npm run test:marketplace-customer-links &&
+          npm run test:marketplace-cloud-client && npm run test:marketplace-cloud-order-sync &&
+          npm run test:marketplace-cloud-auto-sync && npm run test:marketplace-cloud-order-actions &&
+          npm run test:marketplace-cloud-reconciliation && npm run test:marketplace-cloud-catalogue &&
+          npm run test:marketplace-platform-control && npm run test:marketplace-store-orders &&
           npm run test:marketplace-order-truth && npm run test:marketplace-customer-status &&
           npm run test:marketplace-pickup && npm run test:marketplace-settlement &&
           npm run test:marketplace-settlement-batches && npm run test:marketplace-cash &&
@@ -83,6 +87,13 @@ jobs:
           path: webapp/webapp-sbom.json
       - name: Run static accessibility audit
         run: npm run audit:a11y
+        working-directory: webapp
+      - name: Verify connected-web adapter contracts
+        run: >-
+          node ../server/node_modules/tsx/dist/cli.mjs --tsconfig tsconfig.json scripts/test-report-adapter.ts &&
+          node ../server/node_modules/tsx/dist/cli.mjs --tsconfig tsconfig.json scripts/test-statistics-adapter.ts &&
+          node ../server/node_modules/tsx/dist/cli.mjs --tsconfig tsconfig.json scripts/test-store-packages-adapter.ts &&
+          node ../server/node_modules/tsx/dist/cli.mjs --tsconfig tsconfig.json scripts/test-upi-qr-adapter.ts
         working-directory: webapp
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
@@ -115,6 +126,9 @@ jobs:
         working-directory: desktop
       - name: Verify release signature implementation
         run: npm run test:release-signature
+        working-directory: desktop
+      - name: Verify production release prerequisites
+        run: npm run test:production-release-guard
         working-directory: desktop
 
   windows-desktop:

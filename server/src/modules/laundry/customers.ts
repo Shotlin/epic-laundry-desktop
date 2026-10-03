@@ -184,7 +184,10 @@ export function customerProfile(tenant: string, id: string) {
     return amountPaise === undefined ? Number(order.data.grand_total || 0) : moneyNumber(amountPaise);
   };
   const unreconciledOrderIds = orders.filter((order) => order.data.state !== 'Cancelled' && orderAmount(order) > 0 && !ledger.some((entry) => entry.referenceType === 'laundry_order' && entry.referenceId === order.id)).map((order) => order.id);
-  const balance = round(ledger.reduce((sum, entry) => sum + entry.debit - entry.credit, 0));
+  // Standalone wallet movements are a separate stored-value balance, not an
+  // order receivable. Wallet redemptions applied to an order use a payment
+  // entry reference and remain part of the order balance.
+  const balance = round(ledger.filter((entry) => entry.referenceType !== 'laundry_wallet_entry').reduce((sum, entry) => sum + entry.debit - entry.credit, 0));
   const walletBalance = round(wallet.reduce((sum, entry) => sum + (entry.entryType === 'Debit' ? -entry.amount : entry.amount), 0));
   const rewardPoints = rewards.reduce((sum, entry) => sum + entry.points, 0);
   const consents = store.rowsOf(tenant, 'laundry_customer_consent').filter((row) => row.data.customer === id).sort((a, b) => String(b.data.captured_at || b.created_at).localeCompare(String(a.data.captured_at || a.created_at))).map((row) => ({ id: row.id, type: String(row.data.consent_type || ''), granted: Boolean(row.data.granted), capturedAt: String(row.data.captured_at || row.created_at), source: String(row.data.source || '') }));
@@ -193,7 +196,7 @@ export function customerProfile(tenant: string, id: string) {
   const currentPackageDefinition = currentPackageRow ? store.getRow(tenant, String(currentPackageRow.data.service_package)) : undefined;
   const byState = Object.fromEntries(['Booked', 'Picked Up', 'In Process', 'Ready', 'Out for Delivery', 'Delivered', 'Cancelled'].map((state) => [state, orders.filter((order) => order.data.state === state).length]));
   const timeline = [
-    ...ledger.map((entry) => ({ at: entry.entryDate, type: 'ledger', label: entry.entryType, amount: round(entry.debit - entry.credit), referenceId: entry.referenceId, reason: entry.reason })),
+    ...ledger.filter((entry) => entry.referenceType !== 'laundry_wallet_entry').map((entry) => ({ at: entry.entryDate, type: 'ledger', label: entry.entryType, amount: round(entry.debit - entry.credit), referenceId: entry.referenceId, reason: entry.reason })),
     ...wallet.map((entry) => ({ at: entry.entryDate, type: 'wallet', label: `Wallet ${entry.entryType}`, amount: entry.entryType === 'Debit' ? -entry.amount : entry.amount, referenceId: entry.referenceId, reason: entry.reason })),
     ...rewards.map((entry) => ({ at: entry.entryDate, type: 'reward', label: 'Reward adjustment', amount: entry.points, referenceId: entry.referenceId, reason: entry.reason })),
   ].sort((a, b) => b.at.localeCompare(a.at));
@@ -207,7 +210,7 @@ export function customerProfile(tenant: string, id: string) {
     orders: orders.map((order) => ({ id: order.id, orderNumber: order.data.name || order.id, orderDate: order.data.order_date, state: order.data.state, grandTotal: orderAmount(order), invoice: order.data.invoice || null, paymentStatus: order.data.payment_status || 'Unpaid', fulfillmentMode: order.data.fulfillment_mode || 'Home Delivery', expectedDeliveryDate: order.data.expected_delivery_date || '', serviceZone: order.data.service_zone || '', deliveryAddress: order.data.delivery_address || order.data.address || '', notes: order.data.notes || '', items: Array.isArray(order.data.items) ? order.data.items.map((item: any) => ({ garment: String(item.garment || ''), service: String(item.service || ''), qty: Number(item.qty || 0) })) : [] })),
     marketplace: { links: marketplaceLinks, orders: marketplaceOrders.map((order) => ({ id: order.id, externalOrderId: order.externalOrderId, orderNumber: order.orderNumber, channel: order.channel, state: order.state, paymentState: order.paymentState, updatedAt: order.updatedAt })) },
     ledger, wallet, rewards, timeline,
-    reconciliation: { customerLedgerBalance: balance, walletBalance, orderCount: orders.length, unreconciledOrderCount: unreconciledOrderIds.length, note: unreconciledOrderIds.length ? `${unreconciledOrderIds.length} historical order(s) predate the customer ledger and require controlled reconciliation; displayed balance is ledger-only.` : 'Balances are derived from append-only customer and wallet ledger entries.' },
+    reconciliation: { customerLedgerBalance: balance, walletBalance, orderCount: orders.length, unreconciledOrderCount: unreconciledOrderIds.length, note: unreconciledOrderIds.length ? `${unreconciledOrderIds.length} historical order(s) predate the customer ledger and require controlled reconciliation; displayed order balance is ledger-only.` : 'Order balance excludes separate wallet movements; order payments and wallet balance are shown separately.' },
   };
 }
 

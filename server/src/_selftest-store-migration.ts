@@ -35,7 +35,8 @@ try {
   assert.equal(hiddenFromOtherStore, undefined, 'migrated rows are isolated from other stores');
   const migrations = store.migrationStatus();
   assert.deepEqual(migrations.map((migration) => migration.version), Array.from({ length: migrations.length }, (_, index) => index + 1), 'schema migrations are recorded in monotonically ordered versions');
-  assert.equal(migrations.at(-1)?.name, 'platform-admin-session', 'latest platform-admin migration is checksum-tracked');
+  assert.equal(migrations.find((migration) => migration.version === 39)?.name, 'platform-admin-session', 'platform-admin migration remains checksum-tracked');
+  assert.equal(migrations.find((migration) => migration.version === 40)?.name, 'marketplace-cloud-sync-health', 'cloud sync-health migration is checksum-tracked');
   assert.ok(migrations.every((migration) => /^[a-f0-9]{64}$/.test(migration.checksum)), 'each migration has a SHA-256 checksum');
   const constraintProbe = new Database(sqliteFile);
   try {

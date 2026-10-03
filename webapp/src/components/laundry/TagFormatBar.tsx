@@ -47,6 +47,8 @@ export function TagLabelPreview({
       </span>
       {svg ? (
         <div
+          role="img"
+          aria-label={`Code 128 barcode for tag ${tag.tagNumber}`}
           className="mx-auto overflow-hidden rounded-md border border-[#263f44]/15 bg-white shadow-[0_6px_18px_rgba(37,48,43,.08)] [&>svg]:block [&>svg]:h-auto [&>svg]:w-full"
           style={{ maxWidth: "26rem" }}
           dangerouslySetInnerHTML={{ __html: svg }}

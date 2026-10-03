@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CalendarClock, CheckCircle2, Clock3, Loader2, Play, ShieldAlert, Shirt, UserRound, Wrench } from 'lucide-react'
 import { useState } from 'react'
 import { apiGet, apiPost } from '@/lib/api'
+import { invalidateProductionViews } from '@/lib/productionQueries'
 import VisualEmptyState from '@/components/laundry/VisualEmptyState'
 import VisualLoadingState from '@/components/laundry/VisualLoadingState'
 
@@ -25,9 +26,9 @@ export default function LaundryProductionQueue() {
   const workload = useQuery({ queryKey: ['production-workload'], queryFn: () => apiGet<Workload>('/laundry/production-workload') })
   const schedule = useQuery({ queryKey: ['production-schedule'], queryFn: () => apiGet<Schedule>('/laundry/production-schedule') })
   const supervisorMetrics = useQuery({ queryKey: ['production-supervisor-metrics'], queryFn: () => apiGet<SupervisorMetrics>('/laundry/production-supervisor-metrics'), refetchInterval: 60000 })
-  const autoAssign = useMutation({ mutationFn: (taskIds: string[]) => apiPost<WorkloadAssignment>('/laundry/production-workload/assign', { taskIds }), onSuccess: (result) => { setAssignmentNotice(`${result.assigned.length} task${result.assigned.length === 1 ? '' : 's'} assigned${result.skipped.length ? ` · ${result.skipped.length} skipped` : ''}.`); client.invalidateQueries({ queryKey: ['production-queue'] }); client.invalidateQueries({ queryKey: ['production-workload'] }); client.invalidateQueries({ queryKey: ['production-schedule'] }) }, onError: (error: Error) => setAssignmentNotice(error.message || 'Automatic assignment was not applied.') })
-  const start = useMutation({ mutationFn: (id: string) => apiPost<Task>(`/laundry/production-tasks/${id}/start`), onSuccess: () => { client.invalidateQueries({ queryKey: ['production-queue'] }); client.invalidateQueries({ queryKey: ['production-workload'] }) } })
-  const assign = useMutation({ mutationFn: ({ id, assignedTo }: { id: string; assignedTo: string }) => apiPost<Task>(`/laundry/production-tasks/${id}/assign`, { assignedTo }), onSuccess: (_task, variables) => { setAssignment((current) => ({ ...current, [variables.id]: '' })); client.invalidateQueries({ queryKey: ['production-queue'] }); client.invalidateQueries({ queryKey: ['production-workload'] }); } })
+  const autoAssign = useMutation({ mutationFn: (taskIds: string[]) => apiPost<WorkloadAssignment>('/laundry/production-workload/assign', { taskIds }), onSuccess: async (result) => { setAssignmentNotice(`${result.assigned.length} task${result.assigned.length === 1 ? '' : 's'} assigned${result.skipped.length ? ` · ${result.skipped.length} skipped` : ''}.`); await invalidateProductionViews(client) }, onError: (error: Error) => setAssignmentNotice(error.message || 'Automatic assignment was not applied.') })
+  const start = useMutation({ mutationFn: (id: string) => apiPost<Task>(`/laundry/production-tasks/${id}/start`), onSuccess: async () => { await invalidateProductionViews(client) } })
+  const assign = useMutation({ mutationFn: ({ id, assignedTo }: { id: string; assignedTo: string }) => apiPost<Task>(`/laundry/production-tasks/${id}/assign`, { assignedTo }), onSuccess: async (_task, variables) => { setAssignment((current) => ({ ...current, [variables.id]: '' })); await invalidateProductionViews(client) } })
   const canStart = Boolean(session.data?.user?.roles.some((role) => role === 'owner' || role === 'processing_staff'))
   const canAssign = canStart
   if (queue.isLoading) return <VisualLoadingState title="Preparing work queue" detail="Reading stage, priority, due-time and operator assignment signals." />

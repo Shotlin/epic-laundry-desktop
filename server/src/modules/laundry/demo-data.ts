@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { store } from '../../kernel/store.js';
 import { createRow } from '../../kernel/entity-service.js';
-import { laundryCatalogue, bookLaundryOrder, assignLaundryOrder, transitionLaundryOrder, cancelLaundryOrder, scanLaundryGarment, createLaundryRider, createLaundryExpense, createLaundryPrintJob, saveLaundryRiderSettlement } from './domain.js';
+import { laundryCatalogue, bookLaundryOrder, assignLaundryOrder, transitionLaundryOrder, cancelLaundryOrder, scanLaundryGarment, createLaundryRider, createLaundryExpense, createLaundryPrintJob, saveLaundryRiderSettlement, saveLaundryChargeRule, saveLaundryDiscountRule } from './domain.js';
 import { markLaundryAttendance } from './management.js';
 import { laundryBusinessDate } from './dates.js';
 import { createServiceZone, createRouteRun, startRouteRun, completeRouteStop } from './routes.js';
@@ -478,6 +478,32 @@ function seedMarketplace(tenant: string) {
   return { projections: store.listMarketplaceOrderProjections(tenant).length, settlements: store.rowsOf(tenant, 'marketplace_settlement').length };
 }
 
+function seedCounterPricingRules(tenant: string) {
+  const charges = [
+    { name: 'Premium Express Delivery', type: 'Flat' as const, amount: 60, expressCharge: true, description: 'Applied automatically when Express Delivery is selected in the demo counter.' },
+    { name: 'Home Collection Charge', type: 'Flat' as const, amount: 40, expressCharge: false, description: 'Optional doorstep collection charge.' },
+    { name: 'Delicate Care Supplement', type: 'Percentage' as const, amount: 8, expressCharge: false, description: 'Optional specialist-care supplement.' },
+  ];
+  const discounts = [
+    { name: 'Welcome Offer', type: 'Percentage' as const, amount: 10, description: 'Sample first-order percentage discount.' },
+    { name: 'Loyalty Savings', type: 'Flat' as const, amount: 50, description: 'Sample returning-customer discount.' },
+    { name: 'Household Care Saving', type: 'Percentage' as const, amount: 5, description: 'Sample household-care promotion.' },
+  ];
+  let chargesCreated = 0;
+  let discountsCreated = 0;
+  for (const rule of charges) {
+    if (store.rowsOf(tenant, 'laundry_charge_rule').some((row) => String(row.data.name || '').trim().toLowerCase() === rule.name.toLowerCase())) continue;
+    saveLaundryChargeRule(tenant, TENANT_ACTOR, { ...rule, active: true });
+    chargesCreated += 1;
+  }
+  for (const rule of discounts) {
+    if (store.rowsOf(tenant, 'laundry_discount_rule').some((row) => String(row.data.name || '').trim().toLowerCase() === rule.name.toLowerCase())) continue;
+    saveLaundryDiscountRule(tenant, TENANT_ACTOR, { ...rule, active: true });
+    discountsCreated += 1;
+  }
+  return { chargesCreated, discountsCreated };
+}
+
 export function seedLaundryDemoExpansion(tenant: string) {
   if (tenant !== 'T1' || process.env.EPIC_WORKSPACE_MODE !== 'demo') return { seeded: false, reason: 'not-demo' };
   const existingMarker = store.getRow(tenant, markerId);
@@ -520,10 +546,11 @@ export function seedLaundryDemoLifecycleCoverage(tenant: string) {
 /** Additive customer-program and print-history fixtures for older demo installs. */
 export function seedLaundryDemoExperienceCoverage(tenant: string) {
   if (tenant !== 'T1' || process.env.EPIC_WORKSPACE_MODE !== 'demo') return { seeded: false, reason: 'not-demo' };
+  const counterPricing = seedCounterPricingRules(tenant);
   const completedRoute = seedCompletedRouteCoverage(tenant);
   const routeException = seedRouteExceptionCoverage(tenant);
   const hrDepth = seedHrDepthCoverage(tenant);
   const customerPrograms = seedCustomerProgramCoverage(tenant);
   const printCoverage = seedPrintCoverage(tenant);
-  return { seeded: completedRoute || routeException || hrDepth.leaveApplications > 0 || hrDepth.expenseClaims > 0 || hrDepth.loans > 0 || hrDepth.jobOpenings > 0 || customerPrograms.wallets > 0 || customerPrograms.addresses > 0 || printCoverage.created > 0, version: 'DEMO-DATA-V4.10', completedRoute, routeException, hrDepth, customerPrograms, printCoverage };
+  return { seeded: counterPricing.chargesCreated > 0 || counterPricing.discountsCreated > 0 || completedRoute || routeException || hrDepth.leaveApplications > 0 || hrDepth.expenseClaims > 0 || hrDepth.loans > 0 || hrDepth.jobOpenings > 0 || customerPrograms.wallets > 0 || customerPrograms.addresses > 0 || printCoverage.created > 0, version: 'DEMO-DATA-V4.11', counterPricing, completedRoute, routeException, hrDepth, customerPrograms, printCoverage };
 }

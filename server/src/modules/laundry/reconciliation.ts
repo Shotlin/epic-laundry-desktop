@@ -1,5 +1,6 @@
 import { parseMoney, moneyNumber } from '../../kernel/money.js';
 import { store } from '../../kernel/store.js';
+import { cashShiftMovements } from './cash.js';
 
 type Issue = { code: string; entity: string; id: string; message: string };
 
@@ -74,8 +75,17 @@ export function laundryFinancialReconciliation(tenant: string) {
   for (const expense of store.rowsOf(tenant, 'laundry_expense').filter((row) => row.status !== 'Cancelled')) {
     try { const amount = authoritativeEntryAmount(tenant, 'expense', expense, expense.data.amount, `expense ${expense.id}`); expensePaise += amount; expected('expense', expense.entity, expense.id, amount); } catch (error: any) { issues.push({ code: 'INVALID_MONEY', entity: expense.entity, id: expense.id, message: error.message }); }
   }
-  for (const pkg of store.rowsOf(tenant, 'customer_package').filter((row) => row.data.payment_mode && row.data.payment_mode !== 'Pay Later' && Number(row.data.price_paid || 0) > 0)) {
-    try { expected('package-payment', pkg.entity, pkg.id, authoritativeEntryAmount(tenant, 'package-payment', pkg, pkg.data.price_paid, `package ${pkg.id} payment`)); } catch (error: any) { issues.push({ code: 'INVALID_MONEY', entity: pkg.entity, id: pkg.id, message: error.message }); }
+  for (const pkg of store.rowsOf(tenant, 'customer_package')) {
+    try {
+      const initialEntry = store.financialEntryAmountPaise(tenant, 'package-payment', pkg.entity, pkg.id);
+      const initialDocument = store.financialDocumentAmountPaise(tenant, 'package-payment', pkg.entity, pkg.id);
+      const hasBalancePayments = store.rowsOf(tenant, 'customer_package_payment').some((payment) => payment.data.customer_package === pkg.id && payment.status !== 'Cancelled');
+      // `price_paid` and `payment_mode` are compatibility aggregates updated as
+      // later balance payments arrive. Validate only the immutable initial
+      // receipt here; every subsequent receipt is validated from its own row.
+      const initialAmount = initialEntry ?? initialDocument ?? (hasBalancePayments ? 0 : paise(pkg.data.initial_payment_amount ?? (pkg.data.payment_mode !== 'Pay Later' ? pkg.data.price_paid : 0), `package ${pkg.id} initial payment`));
+      if (initialAmount > 0) expected('package-payment', pkg.entity, pkg.id, initialAmount);
+    } catch (error: any) { issues.push({ code: 'INVALID_MONEY', entity: pkg.entity, id: pkg.id, message: error.message }); }
   }
   for (const payment of store.rowsOf(tenant, 'customer_package_payment').filter((row) => row.status !== 'Cancelled')) {
     try { expected('package-payment', payment.entity, payment.id, authoritativeEntryAmount(tenant, 'package-payment', payment, payment.data.amount, `package payment ${payment.id}`)); } catch (error: any) { issues.push({ code: 'INVALID_MONEY', entity: payment.entity, id: payment.id, message: error.message }); }
@@ -129,10 +139,10 @@ export function laundryFinancialReconciliation(tenant: string) {
     try {
       const normalizedClose = store.cashShiftCloseFor(tenant, shift.id);
       const opening = paise(shift.data.opening_cash, `cash shift ${shift.id} opening`);
-      const inShift = (row: any) => row.data.cash_shift_id === shift.id || (!row.data.cash_shift_id && row.created_at >= shift.created_at);
-      const collections = store.rowsOf(tenant, 'payment_entry').filter((row) => row.status === 'Submitted' && row.data.payment_type === 'Receive' && row.data.mode === 'Cash' && inShift(row)).reduce((sum, row) => sum + authoritativeDocumentAmount(tenant, 'payment', row, row.data.amount, `payment ${row.id}`), 0);
-      const expenses = store.rowsOf(tenant, 'laundry_expense').filter((row) => row.status === 'Paid' && row.data.payment_mode === 'Cash' && inShift(row)).reduce((sum, row) => sum + authoritativeEntryAmount(tenant, 'expense', row, row.data.amount, `expense ${row.id}`), 0);
-      const refunds = store.rowsOf(tenant, 'payment_entry').filter((row) => row.status === 'Cancelled' && row.data.payment_type === 'Receive' && row.data.mode === 'Cash' && row.data.provider_status === 'Reversed' && inShift(row)).reduce((sum, row) => sum + authoritativeEntryAmount(tenant, 'refund', row, row.data.amount, `refund ${row.id}`), 0);
+      const movements = cashShiftMovements(tenant, shift);
+      const collections = movements.collectionsPaise;
+      const expenses = movements.expensesPaise;
+      const refunds = movements.refundsPaise;
       const expectedCash = opening + collections - expenses - refunds;
       const persistedExpected = paise(shift.data.expected_cash, `cash shift ${shift.id} expected`);
       if (persistedExpected !== expectedCash) issues.push({ code: 'CASH_CLOSE_MISMATCH', entity: shift.entity, id: shift.id, message: `persisted expected cash ${moneyNumber(persistedExpected).toFixed(2)} differs from canonical movement total ${moneyNumber(expectedCash).toFixed(2)}` });

@@ -1,5 +1,7 @@
 # Epic Laundry — Final System Audit
 
+> **Historical assessment dated 28 August 2026.** This report records an earlier implementation/release assessment. Its `PASS` rows and release recommendation do not establish completion of the current 16-phase MyUniClean parity, integrated-workflow, or launch-readiness goal. Use [the current 16-phase roadmap](../myuniclean-16-phase-execution-roadmap.md) and [master parity matrix](MASTER_PARITY_MATRIX.md) for current status.
+
 **Reassessment date:** 28 August 2026
 **Baseline evidence:** `C:/Users/MSI/OneDrive/Desktop/lndry_management_system/Epic-Laundry-Product-Audit.md`
 **Implementation:** `epic_crm_shotlin` working tree
@@ -178,3 +180,43 @@ throughput. All charts are driven by the statistics API and render against the
 deterministic demo seed on a fresh install. The refreshed NSIS installer was
 built, the prior installation was removed, the new build installed and opened,
 and its loopback health check returned HTTP 200.
+
+## 2 October 2026 — final local verification
+
+- Full clean Playwright regression: **119/119 passed** (16 minutes) on a
+  disposable SQLite workspace. The suite includes dashboard and booking flows,
+  the selected GST rule, customer/order history, garment production and routes,
+  cash/wallet/expense reconciliation, all reports and exports, role access,
+  navigation, Settings, offline recovery, accessibility, themes and mobile
+  widths. No source or installed user data was written.
+- Minified Vite build, server typecheck/build, Windows `pack`, and Windows
+  `dist:win` completed. The NSIS setup and portable executable are internal
+  unsigned artifacts under `desktop/dist`; manifest verification passed for
+  3,866 checksum entries.
+- The executables report `NotSigned`. The production-release guard blocks until
+  the approved release version/confirmation, Authenticode certificate and
+  password, Ed25519 manifest key pair, and HTTPS update feed are configured.
+- MyUniClean redirected the read-only audit tab to Sign In when Garment Pricing
+  was opened. Full source parity and connected-vendor persistence therefore
+  remain unverified. The package was not installed against the user's data.
+
+Local code, browser, and internal-package checks are green. This is not a signed
+production release or final source-parity sign-off. See `MYUNICLEAN_PHASE_16_WORKLOG.md`.
+
+## 3 October 2026 — source audit resumed
+
+- The MyUniClean session was restored by the user and the previously interrupted
+  read-only Settings audit was completed. Garment Pricing, Store Discounts,
+  WhatsApp Message Templates, Store Users, Store Packages and Order No Series
+  were opened. These lists are empty in the currently authenticated source
+  store. No source record, setting, filter, export, template or order was
+  changed.
+- Eight focused Epic Settings/Catalogue tests passed, followed by server
+  typecheck, catalogue and mocked connected-vendor adapter checks. The normal
+  minified frontend build and desktop workspace/cloud/menu/recovery/manifest
+  checks passed as well.
+- The only remaining release gates require external material unavailable in the
+  local workspace: an authorized non-production connected-vendor account for
+  remote persistence/retry certification, and the signing plus update-feed
+  credentials needed for a customer release. The package remains unsigned QA
+  output and was not installed over existing user data.

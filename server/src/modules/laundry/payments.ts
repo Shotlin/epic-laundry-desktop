@@ -53,9 +53,10 @@ function syncOrderPaymentState(order: EntityRow, total: number, paid: number, la
 export function laundryPaymentSummary(tenant: string, orderId: string) {
   const { order, invoice } = orderRow(tenant, orderId, true);
   const total = invoiceAmount(tenant, invoice, order);
+  const canonicalInvoice = canonicalInvoiceFor(tenant, invoice);
   const payments = validPayments(tenant, invoice.id).map((payment) => ({ id: payment.id, amount: paymentAmount(tenant, payment), mode: String(payment.data.mode || 'Cash'), reference: String(payment.data.reference || ''), providerStatus: String(payment.data.provider_status || 'Manual'), postingDate: String(payment.data.posting_date || ''), remarks: String(payment.data.remarks || '') }));
   const paid = round(payments.reduce((sum, payment) => sum + payment.amount, 0));
-  return { orderId: order.id, invoiceId: invoice.id, invoiceNumber: String(invoice.data.name || invoice.id), total, paid, outstanding: Math.max(0, round(total - paid)), status: paymentStatus(total, paid), payments, provider: { mode: 'manual-safe', onlineConfirmation: false, note: 'No payment gateway is configured; UPI/Card entries are recorded as operator-confirmed local evidence.' } };
+  return { orderId: order.id, invoiceId: invoice.id, invoiceNumber: String(canonicalInvoice?.invoiceNumber || invoice.data.name || invoice.id), total, paid, outstanding: Math.max(0, round(total - paid)), status: paymentStatus(total, paid), payments, provider: { mode: 'manual-safe', onlineConfirmation: false, note: 'No payment gateway is configured; UPI/Card entries are recorded as operator-confirmed local evidence.' } };
 }
 
 export function collectLaundryPayment(tenant: string, actor: string, orderId: string, input: LaundryPaymentInput) {

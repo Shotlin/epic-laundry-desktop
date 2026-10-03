@@ -1,17 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowLeft,
   AlertTriangle,
   CalendarDays,
   Ban,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   Clock3,
   Cloud,
   CircleDollarSign,
   Download,
+  ExternalLink,
   Eye,
   Layers3,
+  LayoutGrid,
   Loader2,
+  List,
   MapPin,
   Pencil,
   Printer,
@@ -19,6 +24,7 @@ import {
   RotateCcw,
   Save,
   Search,
+  SlidersHorizontal,
   Tag,
   Truck,
   UserCheck,
@@ -28,7 +34,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { apiGet, apiPatch, apiPost, operatorErrorMessage } from "@/lib/api";
 import {
   nextLaundryState,
@@ -39,23 +45,49 @@ import {
   type LaundryPaymentSummary,
   type LaundryState,
 } from "@/lib/laundry";
-import { cn, formatINR, formatMoney } from "@/lib/utils";
+import { cn, formatDate, formatINR, formatMoney } from "@/lib/utils";
+import { summaryRows } from "@/lib/priceBreakdown";
 import OrderItemEditor from "@/components/laundry/OrderItemEditor";
 import VisualEmptyState from "@/components/laundry/VisualEmptyState";
 import { OrderStatusDialog, type StatusMove, type StatusOverride } from "@/components/laundry/OrderStatusDialog";
+import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { canUseUi } from "@/lib/permissions";
+import { isWebOnly, sessionFromStoredCloud } from "@/lib/cloudAuth";
 
-const states: Array<LaundryState | "all"> = [
-  "all",
-  "Booked",
-  "Picked Up",
-  "In Process",
-  "Ready",
-  "Out for Delivery",
-  "Delivered",
-  "Cancelled",
-];
+const orderStatusFilters = [
+  { value: "booked", label: "Booked" },
+  { value: "in-process", label: "In Process" },
+  { value: "delivered", label: "Delivered" },
+  { value: "cancelled", label: "Cancelled" },
+  { value: "done", label: "Done" },
+  { value: "partially-delivered", label: "Partially Delivered" },
+  { value: "pickup-assigned", label: "Pickup Assigned" },
+  { value: "pickup-received", label: "Pickup Received" },
+  { value: "out-for-delivery", label: "Out for Delivery" },
+] as const;
+type OrderStatusFilter = (typeof orderStatusFilters)[number]["value"];
+type BulkOrderStatusMove = { orders: LaundryOrder[]; next: "Ready" | "Delivered" };
 
 type OrderPage = { items: LaundryOrder[]; total: number; page: number; pageSize: number; totalPages: number };
+type OrderFilterOptions = { sources: string[]; reporters: string[] };
+type OrderFilters = { phone: string; orderNo: string; customer: string; statuses: OrderStatusFilter[]; source: string; reportedBy: string; from: string; to: string };
+function sameStatusSelection(left: OrderStatusFilter[], right: OrderStatusFilter[]) {
+  return left.length === right.length && left.every((status) => right.includes(status));
+}
+function isBulkDeliveryEligible(order: LaundryOrder) {
+  return order.state === "Out for Delivery" || (order.state === "Ready" && order.fulfillmentMode === "Pickup Order");
+}
+function isBulkDoneEligible(order: LaundryOrder) {
+  if (order.state !== "In Process") return false;
+  const readyUnitStates = new Set(["Racked", "Dispatched", "Delivered"]);
+  const readyContainerStates = new Set(["Ready", "Dispatched", "Delivered"]);
+  const units = (order.physicalUnits || []).filter((unit) => unit.state !== "Cancelled");
+  const containers = (order.containers || []).filter((container) => container.state !== "Cancelled");
+  return units.every((unit) => readyUnitStates.has(unit.state)) && containers.every((container) => readyContainerStates.has(container.state));
+}
+function isBulkSelectable(order: LaundryOrder) {
+  return isBulkDoneEligible(order) || isBulkDeliveryEligible(order);
+}
 type CustomerRecord = { id: string; name: string; phone: string; email: string; address: string; preferredContact?: string; marketingConsent?: boolean };
 type OnlineOnlyCustomer = { name: string; phone: string; orderCount: number; lastOrderAt: string };
 type CustomerInsight = {
@@ -65,6 +97,12 @@ type CustomerInsight = {
 };
 type CustomerViewStatus = "all" | "contactable" | "restricted";
 type CustomerViewSegment = "all" | "new" | "repeat" | "at_risk" | "lapsed" | "no_orders" | "unknown";
+type DashboardQueue = "pending" | "booking" | "delivery" | "delivered" | "pickup-unassigned" | "delivery-due" | "delivery-unassigned" | "express";
+const dashboardQueueLabels: Record<DashboardQueue, string> = {
+  pending: "Pending orders", booking: "Booking", delivery: "Delivery", delivered: "Delivered",
+  "pickup-unassigned": "Pending / unassigned pickup", "delivery-due": "Upcoming delivery",
+  "delivery-unassigned": "Unassigned delivery", express: "Express delivery",
+};
 type CustomerDrawerProfile = {
   customer: CustomerRecord & { notes?: string; servicePreferences?: string };
   metrics: {
@@ -90,20 +128,47 @@ function StoreOrdersCustomersWorkspace() {
   const navigate = useNavigate();
   const client = useQueryClient();
   const [search, setSearch] = useState("");
-  const [state, setState] = useState<LaundryState | "all">("all");
+  const [orderPhone, setOrderPhone] = useState("");
+  const [phoneSuggestionsOpen, setPhoneSuggestionsOpen] = useState(false);
+  const [orderNo, setOrderNo] = useState("");
+  const [orderCustomer, setOrderCustomer] = useState("");
+  const [exportingOrders, setExportingOrders] = useState(false);
+  const [orderExportError, setOrderExportError] = useState("");
+  const [orderExportNotice, setOrderExportNotice] = useState("");
+  const [orderView, setOrderView] = useState<"list" | "grid">("list");
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
+  const [bulkStatusMove, setBulkStatusMove] = useState<BulkOrderStatusMove | null>(null);
+  const [bulkStatusPending, setBulkStatusPending] = useState(false);
+  const [bulkStatusError, setBulkStatusError] = useState("");
+  const [statusFilter, setStatusFilter] = useState<OrderStatusFilter[]>([]);
+  const [statusMenuOpen, setStatusMenuOpen] = useState(false);
+  const statusFilterTriggerRef = useRef<HTMLButtonElement>(null);
+  const [source, setSource] = useState("all");
+  const [reportedBy, setReportedBy] = useState("all");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [appliedOrderFilters, setAppliedOrderFilters] = useState<OrderFilters>({ phone: "", orderNo: "", customer: "", statuses: [], source: "all", reportedBy: "all", from: "", to: "" });
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [searchParams] = useSearchParams();
+  const sessionQuery = useQuery({
+    queryKey: ["auth-session"],
+    queryFn: () => isWebOnly ? Promise.resolve(sessionFromStoredCloud()) : apiGet<{ user: { roles: string[] } | null }>("/auth/session"),
+  });
+  const canTransitionOrders = canUseUi(sessionQuery.data?.user?.roles, "orders.transition");
   const [customerStatus, setCustomerStatus] = useState<CustomerViewStatus>("all");
   const [customerSegment, setCustomerSegment] = useState<CustomerViewSegment>("all");
   const [customerSort, setCustomerSort] = useState<"newest" | "spend">("newest");
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [selectedHistoryOrderId, setSelectedHistoryOrderId] = useState<string | null>(null);
   const linkedCustomerId = searchParams.get("customer");
   const linkedOrderId = searchParams.get("order");
+  const queueParam = searchParams.get("queue");
+  const dashboardQueue = queueParam && queueParam in dashboardQueueLabels ? queueParam as DashboardQueue : undefined;
   const view = searchParams.get("view") === "customers" ? "customers" : "orders";
-  useEffect(() => setPage(1), [search, state, from, to]);
+  useEffect(() => setPage(1), [appliedOrderFilters, dashboardQueue]);
   useEffect(() => {
     if (linkedCustomerId) setSelectedCustomerId(linkedCustomerId);
   }, [linkedCustomerId]);
@@ -111,21 +176,40 @@ function StoreOrdersCustomersWorkspace() {
     if (linkedOrderId) setSelectedOrderId(linkedOrderId);
   }, [linkedOrderId]);
   const filters = new URLSearchParams({
-    search,
-    ...(state === "all" ? {} : { state }),
-    ...(from ? { from } : {}),
-    ...(to ? { to } : {}),
+    ...(appliedOrderFilters.phone ? { phone: appliedOrderFilters.phone } : {}),
+    ...(appliedOrderFilters.orderNo ? { orderNo: appliedOrderFilters.orderNo } : {}),
+    ...(appliedOrderFilters.customer ? { customer: appliedOrderFilters.customer } : {}),
+    ...(appliedOrderFilters.statuses.length ? { status: appliedOrderFilters.statuses.join(",") } : {}),
+    ...(appliedOrderFilters.source === "all" ? {} : { source: appliedOrderFilters.source }),
+    ...(appliedOrderFilters.reportedBy === "all" ? {} : { reportedBy: appliedOrderFilters.reportedBy }),
+    ...(dashboardQueue ? { queue: dashboardQueue } : {}),
+    ...(appliedOrderFilters.from ? { from: appliedOrderFilters.from } : {}),
+    ...(appliedOrderFilters.to ? { to: appliedOrderFilters.to } : {}),
   });
   const orders = useQuery({
-    queryKey: ["laundry-orders", search, state, from, to, page],
+    queryKey: ["laundry-orders", appliedOrderFilters, dashboardQueue, page, pageSize],
     queryFn: () =>
-      apiGet<OrderPage>(`/laundry/orders?${filters.toString()}&page=${page}&pageSize=50`),
+      apiGet<OrderPage>(`/laundry/orders?${filters.toString()}&page=${page}&pageSize=${pageSize}`),
     enabled: view === "orders",
   });
+  const orderFilterOptions = useQuery({
+    queryKey: ["laundry-order-filter-options"],
+    queryFn: () => apiGet<OrderFilterOptions>("/laundry/orders/filter-options"),
+    enabled: view === "orders",
+    staleTime: 60_000,
+  });
+  useEffect(() => setSelectedOrderIds([]), [appliedOrderFilters, dashboardQueue, page, pageSize]);
   const customers = useQuery({
     queryKey: ["laundry-customers", search],
     queryFn: () => apiGet<CustomerRecord[]>(`/laundry/customers?search=${encodeURIComponent(search)}`),
     enabled: view === "customers",
+  });
+  const phoneSuggestionTerm = orderPhone.replace(/\D/g, "");
+  const phoneSuggestions = useQuery({
+    queryKey: ["laundry-order-phone-suggestions", phoneSuggestionTerm],
+    queryFn: () => apiGet<CustomerRecord[]>(`/laundry/customers?search=${encodeURIComponent(phoneSuggestionTerm)}`),
+    enabled: view === "orders" && phoneSuggestionTerm.length >= 3,
+    staleTime: 30_000,
   });
   const customerInsights = useQuery({
     queryKey: ["customer-insights"],
@@ -168,6 +252,57 @@ function StoreOrdersCustomersWorkspace() {
     setStatusMove({ order, next });
   }
   const rows = orders.data?.items || [];
+  const eligibleForDone = rows.filter(isBulkDoneEligible);
+  const eligibleForDelivery = rows.filter(isBulkDeliveryEligible);
+  const selectedOrders = rows.filter((order) => selectedOrderIds.includes(order.id));
+  const selectedForDone = selectedOrders.length > 0 && selectedOrders.every(isBulkDoneEligible);
+  const selectedForDelivery = selectedOrders.length > 0 && selectedOrders.every(isBulkDeliveryEligible);
+  const activeOrderFilterCount = [appliedOrderFilters.phone, appliedOrderFilters.orderNo, appliedOrderFilters.customer, appliedOrderFilters.statuses.length ? "status" : "", appliedOrderFilters.source === "all" ? "" : appliedOrderFilters.source, appliedOrderFilters.reportedBy === "all" ? "" : appliedOrderFilters.reportedBy, appliedOrderFilters.from, appliedOrderFilters.to, dashboardQueue].filter(Boolean).length;
+  const statusFilterSummary = statusFilter.length ? statusFilter.map((value) => orderStatusFilters.find((option) => option.value === value)?.label || value).join(", ") : "All Status";
+  const invalidDateRange = Boolean(from && to && from > to);
+  const hasUnappliedOrderFilters = orderPhone.trim() !== appliedOrderFilters.phone || orderNo.trim() !== appliedOrderFilters.orderNo || orderCustomer.trim() !== appliedOrderFilters.customer || !sameStatusSelection(statusFilter, appliedOrderFilters.statuses) || source !== appliedOrderFilters.source || reportedBy !== appliedOrderFilters.reportedBy || from !== appliedOrderFilters.from || to !== appliedOrderFilters.to;
+  function selectEligibleForDone() {
+    setBulkStatusError("");
+    setStatusNotice("");
+    setSelectedOrderIds(eligibleForDone.map((order) => order.id));
+  }
+  function selectEligibleForDelivery() {
+    setBulkStatusError("");
+    setStatusNotice("");
+    setSelectedOrderIds(eligibleForDelivery.map((order) => order.id));
+  }
+  function toggleOrderSelection(id: string) {
+    setSelectedOrderIds((current) => current.includes(id) ? current.filter((selectedId) => selectedId !== id) : [...current, id]);
+  }
+  function openBulkStatusMove(next: "Ready" | "Delivered") {
+    setBulkStatusError("");
+    setStatusNotice("");
+    setBulkStatusMove({ orders: selectedOrders, next });
+  }
+  async function confirmBulkStatusMove() {
+    if (!bulkStatusMove || bulkStatusPending) return;
+    const move = bulkStatusMove;
+    setBulkStatusPending(true);
+    setBulkStatusError("");
+    const outcomes = await Promise.all(move.orders.map(async (order) => {
+      try {
+        const updated = await apiPost<LaundryOrder>(`/laundry/orders/${order.id}/transition`, { state: move.next, expectedVersion: order.version });
+        return { order, updated, ok: true as const };
+      } catch (error) {
+        return { order, error: error instanceof Error ? error.message : "The status could not be updated.", ok: false as const };
+      }
+    }));
+    const succeeded = outcomes.filter((outcome) => outcome.ok);
+    const failed = outcomes.filter((outcome) => !outcome.ok);
+    setSelectedOrderIds(failed.map((outcome) => outcome.order.id));
+    if (succeeded.length) setStatusNotice(`Moved ${succeeded.length} of ${move.orders.length} selected orders to ${move.next === "Ready" ? "Done (Ready)" : "Delivered"}.`);
+    if (failed.length) setBulkStatusError(`${failed.length} order${failed.length === 1 ? "" : "s"} could not be moved. ${failed.slice(0, 4).map((outcome) => `${outcome.order.orderNumber}: ${outcome.error}`).join(" · ")}${failed.length > 4 ? " · Review the remaining selected orders after refresh." : ""}`);
+    setBulkStatusMove(null);
+    setBulkStatusPending(false);
+    client.invalidateQueries({ queryKey: ["laundry-orders"] });
+    client.invalidateQueries({ queryKey: ["laundry-dashboard"] });
+    client.invalidateQueries({ queryKey: ["laundry-dispatch"] });
+  }
   const customerRows = useMemo(() => {
     const metrics = new Map((customerInsights.data?.customers || []).map((entry) => [entry.customerId, entry]));
     const filtered = (customers.data || []).map((customer) => ({ customer, metric: metrics.get(customer.id) })).filter(({ metric }) => {
@@ -177,6 +312,15 @@ function StoreOrdersCustomersWorkspace() {
     }).filter(({ metric }) => customerSegment === "all" || metric?.segment === customerSegment);
     return filtered.sort((a, b) => customerSort === "spend" ? (b.metric?.revenue || 0) - (a.metric?.revenue || 0) : String(b.metric?.lastOrderDate || "").localeCompare(String(a.metric?.lastOrderDate || "")));
   }, [customers.data, customerInsights.data, customerSegment, customerSort, customerStatus]);
+  const visiblePhoneSuggestions = useMemo(() => {
+    const seen = new Set<string>();
+    return (phoneSuggestions.data || []).filter((customer) => {
+      const identity = `${customer.id}:${customer.phone}`;
+      if (!customer.phone || seen.has(identity)) return false;
+      seen.add(identity);
+      return true;
+    }).slice(0, 8);
+  }, [phoneSuggestions.data]);
   const activeToday = (customerInsights.data?.customers || []).filter((customer) => customer.lastOrderDate === customerInsights.data?.asOf).length;
   const restrictedCustomers = (customerInsights.data?.customers || []).filter((customer) => !customer.contactEligible).length;
   function setView(nextView: "orders" | "customers") {
@@ -184,6 +328,10 @@ function StoreOrdersCustomersWorkspace() {
     if (nextView === "customers") params.set("view", "customers"); else params.delete("view");
     params.delete("order");
     setSearch("");
+    setOrderPhone("");
+    setOrderNo("");
+    setOrderCustomer("");
+    setAppliedOrderFilters((current) => ({ ...current, phone: "", orderNo: "", customer: "" }));
     navigate(`/laundry/orders${params.size ? `?${params.toString()}` : ""}`);
   }
   function closeCustomerDrawer() {
@@ -194,8 +342,14 @@ function StoreOrdersCustomersWorkspace() {
     navigate(`/laundry/orders${params.size ? `?${params.toString()}` : ""}`, { replace: true });
   }
   function openOrderDrawer(id: string) {
+    setSelectedHistoryOrderId(null);
     setSelectedCustomerId(null);
     setSelectedOrderId(id);
+  }
+  function openOrderHistory(id: string) {
+    setSelectedOrderId(null);
+    setSelectedCustomerId(null);
+    setSelectedHistoryOrderId(id);
   }
   function closeOrderDrawer() {
     setSelectedOrderId(null);
@@ -203,6 +357,81 @@ function StoreOrdersCustomersWorkspace() {
     const params = new URLSearchParams(searchParams);
     params.delete("order");
     navigate(`/laundry/orders${params.size ? `?${params.toString()}` : ""}`, { replace: true });
+  }
+  function clearDashboardQueue() {
+    const params = new URLSearchParams(searchParams);
+    params.delete("queue");
+    navigate(`/laundry/orders${params.size ? `?${params.toString()}` : ""}`, { replace: true });
+  }
+  function clearOrderFilters() {
+    setOrderPhone("");
+    setPhoneSuggestionsOpen(false);
+    setOrderNo("");
+    setOrderCustomer("");
+    setStatusFilter([]);
+    setStatusMenuOpen(false);
+    setSource("all");
+    setReportedBy("all");
+    setFrom("");
+    setTo("");
+    setAppliedOrderFilters({ phone: "", orderNo: "", customer: "", statuses: [], source: "all", reportedBy: "all", from: "", to: "" });
+    if (dashboardQueue) clearDashboardQueue();
+  }
+  function applyOrderFilters() {
+    if (invalidDateRange) return;
+    const next: OrderFilters = { phone: orderPhone.trim(), orderNo: orderNo.trim(), customer: orderCustomer.trim(), statuses: [...statusFilter], source, reportedBy, from, to };
+    setStatusMenuOpen(false);
+    setPhoneSuggestionsOpen(false);
+    setPage(1);
+    setAppliedOrderFilters(next);
+    if (!hasUnappliedOrderFilters) void orders.refetch();
+  }
+  async function exportMatchingOrders() {
+    setExportingOrders(true);
+    setOrderExportError("");
+    setOrderExportNotice("");
+    try {
+      const matching: LaundryOrder[] = [];
+      let requestedPage = 1;
+      let totalPages = 1;
+      let expectedTotal: number | undefined;
+      do {
+        const result = await apiGet<OrderPage>(`/laundry/orders?${filters.toString()}&page=${requestedPage}&pageSize=100`);
+        if (expectedTotal !== undefined && result.total !== expectedTotal) {
+          throw new Error("The matching order list changed during export.");
+        }
+        expectedTotal = result.total;
+        if (result.page !== requestedPage || (result.items.length === 0 && matching.length < expectedTotal)) {
+          throw new Error("The order export returned an incomplete page.");
+        }
+        matching.push(...result.items);
+        totalPages = result.totalPages;
+        requestedPage += 1;
+      } while (requestedPage <= totalPages);
+
+      if (matching.length !== (expectedTotal || 0)) {
+        throw new Error("The matching order list changed during export.");
+      }
+      await exportOrders(matching);
+      setOrderExportNotice(`Excel file prepared for ${matching.length} matching orders.`);
+    } catch {
+      setOrderExportError("Could not export all matching orders. Check the connection and try again.");
+    } finally {
+      setExportingOrders(false);
+    }
+  }
+  function toggleStatusFilter(status: OrderStatusFilter) {
+    setStatusFilter((current) => current.includes(status) ? current.filter((value) => value !== status) : [...current, status]);
+  }
+  function closeStatusMenu() {
+    setStatusMenuOpen(false);
+    statusFilterTriggerRef.current?.focus();
+  }
+  function handleStatusMenuKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeStatusMenu();
   }
   return (
     <div className="animate-in fade-in slide-in-from-bottom-2 duration-500">
@@ -236,14 +465,17 @@ function StoreOrdersCustomersWorkspace() {
           </button>
           <button
             type="button"
-            disabled={view !== "orders" || rows.length === 0}
-            onClick={() => void exportOrders(rows)}
+            disabled={view !== "orders" || rows.length === 0 || exportingOrders}
+            onClick={() => void exportMatchingOrders()}
             className="inline-flex items-center gap-2 rounded-xl bg-[#123039] px-3 py-2 text-sm font-bold text-white disabled:bg-[#a8b7b2]"
           >
-            <Download className="h-4 w-4" /> Excel
+            {exportingOrders ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            {exportingOrders ? "Exporting…" : "Excel"}
           </button>
         </div>
       </div>
+      {orderExportError ? <p role="alert" className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">{orderExportError}</p> : null}
+      {orderExportNotice ? <p role="status" className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">{orderExportNotice}</p> : null}
       <div className="mt-5 inline-flex rounded-xl bg-[#ece9f8] p-1" role="tablist" aria-label="Store workspace view">
         <button type="button" role="tab" aria-selected={view === "orders"} onClick={() => setView("orders")} className={cn("rounded-lg px-4 py-2 text-sm font-bold transition", view === "orders" ? "bg-[#241a45] text-white shadow-sm" : "text-[#5f5a72] hover:text-[#241a45]")}>Store orders</button>
         <button type="button" role="tab" aria-selected={view === "customers"} onClick={() => setView("customers")} className={cn("rounded-lg px-4 py-2 text-sm font-bold transition", view === "customers" ? "bg-[#241a45] text-white shadow-sm" : "text-[#5f5a72] hover:text-[#241a45]")}>Customers</button>
@@ -251,42 +483,103 @@ function StoreOrdersCustomersWorkspace() {
       {view === "orders" ? <>
         <OrderPulse rows={rows} loading={orders.isLoading} />
         <section className="mt-6 overflow-hidden rounded-[22px] border border-[#263f44]/10 bg-white shadow-[0_8px_28px_rgba(37,48,43,.04)]">
-          <div className="grid gap-3 border-b border-[#263f44]/10 p-4 lg:grid-cols-[minmax(0,1fr)_180px_135px_135px]">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7e8d90]" />
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Order no, invoice, customer or phone"
-                className="h-10 w-full rounded-xl border border-[#263f44]/15 bg-[#fbfbf9] pl-9 pr-3 text-sm outline-none focus:border-[#438b82]"
-              />
+          <div className="grid gap-3 border-b border-[#263f44]/10 p-4 md:grid-cols-2 xl:grid-cols-[repeat(3,minmax(0,1fr))_auto_auto]">
+            <label className="relative min-w-0 text-[10px] font-bold uppercase tracking-[.12em] text-[#718087]">Phone No
+              <input aria-label="Phone No" aria-autocomplete="list" aria-controls="phone-customer-suggestions" aria-expanded={phoneSuggestionsOpen && phoneSuggestionTerm.length >= 3 && visiblePhoneSuggestions.length > 0} type="tel" inputMode="tel" autoComplete="off" value={orderPhone} onFocus={() => setPhoneSuggestionsOpen(true)} onBlur={() => window.setTimeout(() => setPhoneSuggestionsOpen(false), 120)} onChange={(event) => { setOrderPhone(event.target.value); setPhoneSuggestionsOpen(true); }} onKeyDown={(event) => { if (event.key === "Escape") { setPhoneSuggestionsOpen(false); return; } if (event.key === "Enter") { event.preventDefault(); applyOrderFilters(); } }} placeholder="Enter at least 3 digits" className="mt-1 h-10 w-full rounded-xl border border-[#263f44]/15 bg-[#fbfbf9] px-3 text-sm font-normal normal-case tracking-normal text-[#40565a] outline-none focus:border-[#438b82]" />
+              {phoneSuggestionsOpen && phoneSuggestionTerm.length >= 3 ? <div id="phone-customer-suggestions" role="listbox" aria-label="Saved customer suggestions" className="absolute z-30 mt-1 w-full overflow-hidden rounded-xl border border-[#b9dfd8] bg-white p-1 normal-case tracking-normal shadow-[0_14px_32px_rgba(23,53,60,.16)]">
+                {phoneSuggestions.isFetching ? <p className="flex items-center gap-2 px-3 py-2 text-xs text-[#617178]"><Loader2 className="h-3.5 w-3.5 animate-spin" />Looking up saved customers…</p> : visiblePhoneSuggestions.length ? <><p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-[.12em] text-[#648077]">Saved customers</p>{visiblePhoneSuggestions.map((customer) => <button key={customer.id} type="button" role="option" aria-selected="false" onMouseDown={(event) => event.preventDefault()} onClick={() => { setOrderPhone(customer.phone); setOrderCustomer(customer.name); setPhoneSuggestionsOpen(false); }} className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left hover:bg-[#edf7f4] focus:bg-[#edf7f4] focus:outline-none"><span className="min-w-0"><span className="block truncate text-sm font-bold text-[#24444a]">{customer.name || "Unnamed customer"}</span><span className="block text-xs text-[#617178]">{customer.phone}</span></span><UserRound className="h-4 w-4 shrink-0 text-[#4d8982]" /></button>)}</> : <p className="px-3 py-2 text-xs text-[#617178]">No saved customer matches these digits.</p>}
+              </div> : null}
+            </label>
+            <label className="min-w-0 text-[10px] font-bold uppercase tracking-[.12em] text-[#718087]">Order No
+              <input aria-label="Order No" autoComplete="off" value={orderNo} onChange={(event) => setOrderNo(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); applyOrderFilters(); } }} placeholder="Enter order number" className="mt-1 h-10 w-full rounded-xl border border-[#263f44]/15 bg-[#fbfbf9] px-3 text-sm font-normal normal-case tracking-normal text-[#40565a] outline-none focus:border-[#438b82]" />
+            </label>
+            <label className="min-w-0 text-[10px] font-bold uppercase tracking-[.12em] text-[#718087]">Customer
+              <input aria-label="Customer" autoComplete="off" value={orderCustomer} onChange={(event) => setOrderCustomer(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); applyOrderFilters(); } }} placeholder="Enter customer name" className="mt-1 h-10 w-full rounded-xl border border-[#263f44]/15 bg-[#fbfbf9] px-3 text-sm font-normal normal-case tracking-normal text-[#40565a] outline-none focus:border-[#438b82]" />
+            </label>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                aria-expanded={moreFiltersOpen}
+                aria-controls="store-order-more-filters"
+                onClick={() => { setStatusMenuOpen(false); setMoreFiltersOpen((value) => !value); }}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-[#263f44]/15 bg-white px-3 text-sm font-bold text-[#315d57] hover:bg-[#f1f4f1]"
+              >
+                <SlidersHorizontal className="h-4 w-4" /> More filters
+                {activeOrderFilterCount > 0 ? <span className="rounded-full bg-[#e8bf68] px-1.5 py-0.5 text-[10px] leading-none text-white">{activeOrderFilterCount}</span> : null}
+              </button>
+              {activeOrderFilterCount > 0 || hasUnappliedOrderFilters ? <button type="button" onClick={clearOrderFilters} className="h-10 rounded-xl px-2.5 text-xs font-bold text-[#4d8982] hover:bg-[#eef5f1]">Clear</button> : null}
             </div>
-            <select
-              aria-label="Filter status"
-              value={state}
-              onChange={(event) =>
-                setState(event.target.value as LaundryState | "all")
-              }
-              className="h-10 rounded-xl border border-[#263f44]/15 bg-[#fbfbf9] px-3 text-sm outline-none focus:border-[#438b82]"
-            >
-              {states.map((option) => (
-                <option key={option} value={option}>
-                  {option === "all" ? "All statuses" : option}
-                </option>
-              ))}
-            </select>
-            <DateFilter label="From" value={from} onChange={setFrom} />
-            <DateFilter label="To" value={to} onChange={setTo} />
+            <button type="button" onClick={applyOrderFilters} disabled={invalidDateRange} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[#241a45] px-4 text-sm font-bold text-white hover:bg-[#352766] disabled:cursor-not-allowed disabled:bg-[#9d98b1]">
+              <Search className="h-4 w-4" /> Search
+            </button>
           </div>
-          <div className="flex items-center justify-between border-b border-[#263f44]/8 px-5 py-2.5 text-xs text-[#617178]">
+          {moreFiltersOpen ? <div id="store-order-more-filters" className="grid gap-3 border-b border-[#263f44]/10 bg-[#faf9f5] p-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="relative min-w-0 text-[10px] font-bold uppercase tracking-[.12em] text-[#718087]">
+              <span className="block">Status</span>
+              <button
+                ref={statusFilterTriggerRef}
+                type="button"
+                aria-label="Select order statuses"
+                aria-haspopup="true"
+                aria-expanded={statusMenuOpen}
+                aria-controls="store-order-status-options"
+                title={statusFilterSummary}
+                onClick={() => setStatusMenuOpen((open) => !open)}
+                onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); closeStatusMenu(); } }}
+                className="mt-1 flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-[#263f44]/15 bg-white px-2 text-left text-sm font-normal normal-case tracking-normal text-[#40565a] hover:border-[#438b82] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+              >
+                <span className="min-w-0 truncate">{statusFilterSummary}</span>
+                <ChevronDown className="h-4 w-4 shrink-0 text-[#718087]" aria-hidden="true" />
+              </button>
+              {statusMenuOpen ? <div id="store-order-status-options" role="group" aria-label="Order statuses" onKeyDown={handleStatusMenuKeyDown} className="absolute left-0 top-full z-30 mt-1 w-full min-w-[250px] overflow-hidden rounded-xl border border-[#272043]/12 bg-white text-[#332849] shadow-[0_12px_32px_rgba(32,23,60,.16)]">
+                <div className="flex items-center justify-between border-b border-[#272043]/8 px-3 py-2">
+                  <span className="text-[11px] font-semibold normal-case tracking-normal text-[#777086]">Choose one or more</span>
+                  <button type="button" onClick={() => setStatusFilter([])} className="rounded px-1.5 py-1 text-[11px] font-bold normal-case tracking-normal text-brand-700 hover:bg-brand-50">All Status</button>
+                </div>
+                <div className="max-h-56 overflow-y-auto p-1.5">
+                  {orderStatusFilters.map((option) => <label key={option.value} className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-2 text-xs font-semibold normal-case tracking-normal text-[#3b3253] hover:bg-[#f7f5ff]">
+                    <input type="checkbox" aria-label={option.label} checked={statusFilter.includes(option.value)} onChange={() => toggleStatusFilter(option.value)} className="h-4 w-4 rounded border-[#c9c4d8] accent-[#664cf0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#664cf0]" />
+                    <span>{option.label}</span>
+                  </label>)}
+                </div>
+                <div className="flex items-center justify-between gap-2 border-t border-[#272043]/8 px-3 py-2">
+                  <p className="max-w-[190px] text-[10px] font-medium normal-case leading-4 tracking-normal text-[#777086]">Done appears as Ready; Pickup Received appears as Picked Up.</p>
+                  <button type="button" onClick={closeStatusMenu} aria-label="Close status list" className="shrink-0 rounded-lg bg-[#241a45] px-2.5 py-1.5 text-[11px] font-bold normal-case tracking-normal text-white hover:bg-[#352766]">Close list</button>
+                </div>
+              </div> : null}
+            </div>
+            <label className="text-[10px] font-bold uppercase tracking-[.12em] text-[#718087]">Order source
+              <select aria-label="Filter order source" value={source} onChange={(event) => setSource(event.target.value)} className="mt-1 block h-9 w-full rounded-lg border border-[#263f44]/15 bg-white px-2 text-sm font-normal normal-case tracking-normal text-[#40565a] focus:border-[#438b82]">
+                <option value="all">All sources</option>
+                {(orderFilterOptions.data?.sources || []).map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+            <label className="text-[10px] font-bold uppercase tracking-[.12em] text-[#718087]">Reported by
+              <select aria-label="Filter reporter" value={reportedBy} onChange={(event) => setReportedBy(event.target.value)} className="mt-1 block h-9 w-full rounded-lg border border-[#263f44]/15 bg-white px-2 text-sm font-normal normal-case tracking-normal text-[#40565a] focus:border-[#438b82]">
+                <option value="all">All users</option>
+                {(orderFilterOptions.data?.reporters || []).map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+            <DateFilter label="From" value={from} onChange={setFrom} invalid={invalidDateRange} />
+            <DateFilter label="To" value={to} onChange={setTo} invalid={invalidDateRange} />
+            <p className="text-[11px] text-[#718087] md:col-span-2 xl:col-span-4">Dates filter the order date. Choose both dates or use either date on its own.</p>
+            {invalidDateRange ? <p role="alert" className="text-xs font-semibold text-[#ae453d] md:col-span-2 xl:col-span-4">End date must be the same as or later than the start date.</p> : null}
+          </div> : null}
+          {hasUnappliedOrderFilters ? <p className="border-b border-[#263f44]/8 bg-[#f7f4ff] px-5 py-2 text-xs font-medium text-[#554a78]">Filters changed. Select Search to update the order list.</p> : null}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#263f44]/8 px-5 py-2.5 text-xs text-[#617178]">
             <span>
               <strong className="text-[#315d57]">{orders.data?.total ?? rows.length}</strong> matching
               order{rows.length === 1 ? "" : "s"}
             </span>
-            <span>
-              Print opens the system dialog; choose “Save as PDF” when needed.
-            </span>
+            <div className="flex flex-wrap items-center gap-3">
+              <span>Print opens the system dialog; choose “Save as PDF” when needed.</span>
+              <div role="group" aria-label="Order display" className="inline-flex rounded-lg border border-[#263f44]/15 bg-white p-0.5">
+                <button type="button" aria-label="List view" aria-pressed={orderView === "list"} onClick={() => setOrderView("list")} className={cn("inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs font-bold", orderView === "list" ? "bg-[#eaf3ef] text-[#315d57]" : "text-[#718087] hover:bg-[#f7f8f4]")}><List className="h-4 w-4" />List</button>
+                <button type="button" aria-label="Grid view" aria-pressed={orderView === "grid"} onClick={() => setOrderView("grid")} className={cn("inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs font-bold", orderView === "grid" ? "bg-[#eaf3ef] text-[#315d57]" : "text-[#718087] hover:bg-[#f7f8f4]")}><LayoutGrid className="h-4 w-4" />Grid</button>
+              </div>
+            </div>
           </div>
+          {dashboardQueue ? <div className="flex items-center justify-between gap-3 border-b border-[#c9ddd7] bg-[#eef8f3] px-5 py-2.5 text-xs font-semibold text-[#2e6a60]"><span>Dashboard filter: {dashboardQueueLabels[dashboardQueue]}</span><button type="button" onClick={clearDashboardQueue} className="rounded-lg border border-[#2e6a60]/25 bg-white px-2.5 py-1 text-[11px] font-bold text-[#2e6a60]">Clear filter</button></div> : null}
           {statusNotice ? (
             <div role="status" className="flex items-center justify-between gap-3 border-b border-[#9ccabf] bg-[#eef8f3] px-5 py-2.5 text-xs font-semibold text-[#2e6a60]">
               <span>
@@ -298,18 +591,49 @@ function StoreOrdersCustomersWorkspace() {
               </button>
             </div>
           ) : null}
+          {canTransitionOrders ? (
+            <section aria-label="Bulk order status actions" className="border-b border-[#263f44]/8 bg-[#fbfcf8] px-4 py-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-xs font-bold text-[#315d57]">Bulk status actions</h2>
+                  <p className="mt-1 text-[11px] text-[#718087]">Choose eligible orders on this page, review the count, then confirm the update.</p>
+                </div>
+                <p className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-[#315d57]" aria-live="polite">{selectedOrderIds.length} selected</p>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button type="button" disabled={eligibleForDone.length === 0 || bulkStatusPending} onClick={selectEligibleForDone} className="rounded-lg border border-[#263f44]/15 bg-white px-3 py-2 text-xs font-bold text-[#315d57] disabled:cursor-not-allowed disabled:opacity-50">Select eligible for Done ({eligibleForDone.length})</button>
+                <button type="button" disabled={eligibleForDelivery.length === 0 || bulkStatusPending} onClick={selectEligibleForDelivery} className="rounded-lg border border-[#263f44]/15 bg-white px-3 py-2 text-xs font-bold text-[#315d57] disabled:cursor-not-allowed disabled:opacity-50">Select eligible for delivery ({eligibleForDelivery.length})</button>
+                <button type="button" disabled={!selectedForDone || bulkStatusPending} onClick={() => openBulkStatusMove("Ready")} className="rounded-lg bg-[#123039] px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-[#a8b7b2]">Move selected to Done</button>
+                <button type="button" disabled={!selectedForDelivery || bulkStatusPending} onClick={() => openBulkStatusMove("Delivered")} className="rounded-lg bg-[#123039] px-3 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-[#a8b7b2]">Mark selected delivered</button>
+                <button type="button" disabled={selectedOrderIds.length === 0 || bulkStatusPending} onClick={() => { setSelectedOrderIds([]); setBulkStatusError(""); }} className="rounded-lg px-3 py-2 text-xs font-bold text-[#4d8982] hover:bg-[#eef5f1] disabled:cursor-not-allowed disabled:opacity-50">Clear selection</button>
+              </div>
+              {bulkStatusError ? <p role="alert" className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">{bulkStatusError}</p> : null}
+            </section>
+          ) : null}
           <OrderTable
             rows={rows}
+            layout={orderView}
             loading={orders.isLoading}
             pending={transition.isPending}
+            selectionEnabled={canTransitionOrders}
+            selectedIds={selectedOrderIds}
+            onToggleSelected={toggleOrderSelection}
             onSelect={openOrderDrawer}
+            onOpenHistory={openOrderHistory}
             onOpenCustomer={setSelectedCustomerId}
             onTransition={askStatusChange}
           />
-          <div className="flex items-center justify-between border-t border-[#263f44]/8 px-5 py-3 text-xs text-[#617178]">
-            <button type="button" disabled={page <= 1 || orders.isFetching} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-lg border border-[#263f44]/15 bg-white px-3 py-1.5 font-bold text-[#315d57] disabled:cursor-not-allowed disabled:opacity-40">Previous</button>
-            <span>Page {orders.data?.page || page} of {orders.data?.totalPages || 1}</span>
-            <button type="button" disabled={page >= (orders.data?.totalPages || 1) || orders.isFetching} onClick={() => setPage((value) => value + 1)} className="rounded-lg border border-[#263f44]/15 bg-white px-3 py-1.5 font-bold text-[#315d57] disabled:cursor-not-allowed disabled:opacity-40">Next</button>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#263f44]/8 px-5 py-3 text-xs text-[#617178]">
+            <label className="flex items-center gap-2 font-semibold">Items per page
+              <select aria-label="Items per page" value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1) }} className="h-8 rounded-lg border border-[#263f44]/15 bg-white px-2 text-xs font-bold text-[#315d57] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#438b82]">
+                {[10, 25, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+            </label>
+            <div className="flex items-center gap-3">
+              <button type="button" disabled={page <= 1 || orders.isFetching} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-lg border border-[#263f44]/15 bg-white px-3 py-1.5 font-bold text-[#315d57] disabled:cursor-not-allowed disabled:opacity-40">Previous</button>
+              <span>Page {orders.data?.page || page} of {orders.data?.totalPages || 1}</span>
+              <button type="button" disabled={page >= (orders.data?.totalPages || 1) || orders.isFetching} onClick={() => setPage((value) => value + 1)} className="rounded-lg border border-[#263f44]/15 bg-white px-3 py-1.5 font-bold text-[#315d57] disabled:cursor-not-allowed disabled:opacity-40">Next</button>
+            </div>
           </div>
         </section>
       </> : <>
@@ -356,6 +680,12 @@ function StoreOrdersCustomersWorkspace() {
           client.invalidateQueries({ queryKey: ["laundry-orders"] });
         }}
       />
+      <BulkOrderStatusDialog
+        move={bulkStatusMove}
+        pending={bulkStatusPending}
+        onConfirm={() => void confirmBulkStatusMove()}
+        onClose={() => !bulkStatusPending && setBulkStatusMove(null)}
+      />
       {selectedCustomerId ? (
         <CustomerWorkCardDrawer
           id={selectedCustomerId}
@@ -365,6 +695,9 @@ function StoreOrdersCustomersWorkspace() {
       ) : null}
       {selectedOrderId ? (
         <OrderWorkCardDrawer id={selectedOrderId} onClose={closeOrderDrawer} />
+      ) : null}
+      {selectedHistoryOrderId ? (
+        <OrderHistoryDialog id={selectedHistoryOrderId} onClose={() => setSelectedHistoryOrderId(null)} />
       ) : null}
     </div>
   );
@@ -522,16 +855,16 @@ function CustomerWorkCardDrawer({ id, onClose, onOpenOrder }: { id: string; onCl
         <div className="relative flex items-start justify-between gap-4">
           <div className="min-w-0">
             <p className="text-[10px] font-extrabold uppercase tracking-[.17em] text-brand-700">Customer work card</p>
-            {profile.isLoading ? <div className="mt-2 h-7 w-48 animate-pulse rounded bg-brand-100" /> : <><h2 id="customer-work-card-title" className="mt-1 truncate font-serif text-2xl text-[#21183d]">{customer?.name || "Customer profile"}</h2><p className="mt-1 text-sm text-[#6d6682]">{customer?.phone || "No phone recorded"}{customer?.email ? ` · ${customer.email}` : ""}</p></>}
+            {profile.isLoading ? <div className="mt-2 h-7 w-48 animate-pulse rounded bg-brand-100" /> : <><h2 id="customer-work-card-title" className="mt-1 truncate font-serif text-2xl text-[#21183d]">{customer?.name || "Customer profile"}</h2><p className="mt-1 text-sm text-[#6d6682]">{customer?.phone || "No phone recorded"}{customer?.email ? ` · ${customer.email}` : ""}</p>{customer ? <Link to={`/laundry/customers/${encodeURIComponent(id)}`} onClick={onClose} className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-brand-700 hover:text-brand-900">Open full customer profile <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" /></Link> : null}</>}
           </div>
           <button ref={initialFocusRef} type="button" onClick={onClose} className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-[#272043]/10 bg-white text-[#554d6d] transition hover:bg-brand-50 hover:text-brand-800" aria-label="Close customer work card"><X className="h-4 w-4" /></button>
         </div>
       </header>
       {profile.isLoading ? <div className="grid flex-1 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-brand-600" /></div> : profile.isError || !profile.data ? <div className="m-5 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800"><p className="font-bold">Customer details could not be loaded.</p><p className="mt-1 text-xs">Close this card, then try again from the customer list.</p></div> : <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="grid grid-cols-2 gap-px border-b border-[#272043]/10 bg-[#eae7f4] sm:grid-cols-4">
-          <DrawerMetric label="Total spend" value={formatINR(metrics?.revenue || 0)} tone="text-brand-700" />
-          <DrawerMetric label="Due balance" value={formatINR(metrics?.orderBalance || 0)} tone="text-amber-700" />
-          <DrawerMetric label="Wallet" value={formatINR(metrics?.walletBalance || 0)} tone="text-emerald-700" />
+          <DrawerMetric label="Total spend" value={formatMoney(metrics?.revenue || 0)} tone="text-brand-700" />
+          <DrawerMetric label="Due balance" value={formatMoney(metrics?.orderBalance || 0)} tone="text-amber-700" />
+          <DrawerMetric label="Wallet" value={formatMoney(metrics?.walletBalance || 0)} tone="text-emerald-700" />
           <DrawerMetric label="Rewards" value={String(metrics?.rewardPoints || 0)} tone="text-[#7a4cbb]" />
         </div>
         <div className="px-5 pt-4">
@@ -548,13 +881,13 @@ function CustomerWorkCardDrawer({ id, onClose, onOpenOrder }: { id: string; onCl
               <div className="flex items-start gap-2.5"><WalletCards className="mt-0.5 h-4 w-4 shrink-0 text-brand-600" /><div><p className="font-semibold text-[#2b2344]">Current package</p><p className="mt-0.5 text-xs text-[#746d82]">{metrics?.currentPackage || "No active package"}</p></div></div>
             </div>
           </section>
-          <section className="rounded-2xl border border-[#272043]/10 bg-white p-4"><p className="text-[10px] font-extrabold uppercase tracking-[.15em] text-[#777086]">Recent activity</p><div className="mt-3 space-y-3">{profile.data.timeline.length ? profile.data.timeline.slice(0, 6).map((entry) => <div key={`${entry.at}:${entry.label}`} className="flex gap-2.5"><span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-500" /><div className="min-w-0"><p className="text-xs font-semibold text-[#3b3253]">{entry.label}</p><p className="mt-0.5 text-[11px] text-[#7b7488]">{new Date(entry.at).toLocaleString("en-IN")} {entry.amount ? ` · ${formatINR(entry.amount)}` : ""}</p></div></div>) : <p className="text-xs text-[#7b7488]">No customer activity recorded yet.</p>}</div></section>
+          <section className="rounded-2xl border border-[#272043]/10 bg-white p-4"><p className="text-[10px] font-extrabold uppercase tracking-[.15em] text-[#777086]">Recent activity</p><div className="mt-3 space-y-3">{profile.data.timeline.length ? profile.data.timeline.slice(0, 6).map((entry) => <div key={`${entry.at}:${entry.label}`} className="flex gap-2.5"><span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-500" /><div className="min-w-0"><p className="text-xs font-semibold text-[#3b3253]">{entry.label}</p><p className="mt-0.5 text-[11px] text-[#7b7488]">{new Date(entry.at).toLocaleString("en-IN")} {entry.amount ? ` · ${formatMoney(entry.amount)}` : ""}</p></div></div>) : <p className="text-xs text-[#7b7488]">No customer activity recorded yet.</p>}</div></section>
         </div> : null}
         {section === "orders" ? <div className="space-y-2 px-5 py-4">{profile.data.orders.length ? <>
           <p className="px-1 text-[11px] leading-4 text-[#746d82]">Invoice and order details stay in this customer profile. Select the eye only when you want the separate full order work card.</p>
           {profile.data.orders.map((order) => <article key={order.id} className="rounded-2xl border border-[#272043]/10 bg-white p-3 transition hover:border-brand-200 hover:bg-brand-50/20"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate font-bold text-[#332849]">{order.invoice || order.orderNumber}</p><p className="mt-1 text-xs text-[#746d82]">{order.invoice ? order.orderNumber : "No invoice yet"} · {date(order.orderDate)} · {order.paymentStatus}</p></div><div className="flex shrink-0 items-center gap-2"><StatePill state={order.state as LaundryState} /><button type="button" onClick={() => onOpenOrder(order.id)} className="grid h-8 w-8 place-items-center rounded-lg border border-brand-200 bg-white text-brand-700 transition hover:bg-brand-600 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2" aria-label={`View order ${order.invoice || order.orderNumber}`} title="Open full order work card"><Eye className="h-4 w-4" /></button></div></div><div className="mt-3 flex items-center justify-between border-t border-[#272043]/8 pt-2 text-xs"><span className="text-[#746d82]">{order.expectedDeliveryDate ? `Due ${date(order.expectedDeliveryDate)}` : "No due date"}</span><span className="font-bold tabular-nums text-[#332849]">{formatMoney(order.grandTotal)}</span></div></article>)}
         </> : <VisualEmptyState kind="orders" compact title="No orders for this customer" detail="The booking history will appear here after the first order." />}</div> : null}
-        {section === "ledger" ? <div className="space-y-2 px-5 py-4">{profile.data.ledger.length ? profile.data.ledger.slice(0, 12).map((entry) => <div key={entry.id} className="rounded-xl border border-[#272043]/10 bg-white px-3 py-3"><div className="flex justify-between gap-3"><div><p className="text-xs font-bold text-[#352b4b]">{entry.entryType}</p><p className="mt-1 text-[11px] text-[#7a7388]">{entry.reason || entry.referenceId || "Customer ledger entry"}</p></div><div className="text-right text-xs tabular-nums"><p className={entry.debit ? "font-bold text-rose-700" : "font-bold text-emerald-700"}>{entry.debit ? `−${formatINR(entry.debit)}` : `+${formatINR(entry.credit)}`}</p><p className="mt-1 text-[10px] text-[#8a8397]">{date(entry.entryDate)}</p></div></div></div>) : <VisualEmptyState kind="finance" compact title="No ledger entries" detail="Payments, invoices, credits and wallet activity will be listed here." />}</div> : null}
+        {section === "ledger" ? <div className="space-y-2 px-5 py-4">{profile.data.ledger.length ? profile.data.ledger.slice(0, 12).map((entry) => <div key={entry.id} className="rounded-xl border border-[#272043]/10 bg-white px-3 py-3"><div className="flex justify-between gap-3"><div><p className="text-xs font-bold text-[#352b4b]">{entry.entryType}</p><p className="mt-1 text-[11px] text-[#7a7388]">{entry.reason || entry.referenceId || "Customer ledger entry"}</p></div><div className="text-right text-xs tabular-nums"><p className={entry.debit ? "font-bold text-rose-700" : "font-bold text-emerald-700"}>{entry.debit ? `−${formatMoney(entry.debit)}` : `+${formatMoney(entry.credit)}`}</p><p className="mt-1 text-[10px] text-[#8a8397]">{date(entry.entryDate)}</p></div></div></div>) : <VisualEmptyState kind="finance" compact title="No ledger entries" detail="Payments, invoices, credits and wallet activity will be listed here." />}</div> : null}
       </div>}
     </aside>
   </>;
@@ -568,10 +901,12 @@ function DateFilter({
   label,
   value,
   onChange,
+  invalid = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  invalid?: boolean;
 }) {
   return (
     <label className="text-[10px] font-bold uppercase tracking-[.12em] text-[#718087]">
@@ -581,43 +916,75 @@ function DateFilter({
         type="date"
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-1 block h-8 w-full rounded-lg border border-[#263f44]/15 bg-[#fbfbf9] px-2 text-sm font-normal normal-case tracking-normal text-[#40565a]"
+        aria-invalid={invalid || undefined}
+        className={cn("mt-1 block h-8 w-full rounded-lg border bg-[#fbfbf9] px-2 text-sm font-normal normal-case tracking-normal text-[#40565a]", invalid ? "border-[#ae453d]" : "border-[#263f44]/15")}
       />
     </label>
   );
 }
 function OrderTable({
   rows,
+  layout,
   loading,
   pending,
+  selectionEnabled,
+  selectedIds,
+  onToggleSelected,
   onSelect,
+  onOpenHistory,
   onOpenCustomer,
   onTransition,
 }: {
   rows: LaundryOrder[];
+  layout: "list" | "grid";
   loading: boolean;
   pending: boolean;
+  selectionEnabled: boolean;
+  selectedIds: string[];
+  onToggleSelected: (id: string) => void;
   onSelect: (id: string) => void;
+  onOpenHistory: (id: string) => void;
   onOpenCustomer: (id: string) => void;
   onTransition: (order: LaundryOrder, next: LaundryState) => void;
 }) {
+  if (layout === "grid") {
+    return (
+      <div role="list" aria-label="Store orders" className="grid gap-3 p-4 sm:grid-cols-2 2xl:grid-cols-3">
+        {loading ? <div role="status" className="col-span-full grid h-40 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-[#3a7d78]" /></div> : rows.length ? rows.map((order) => (
+          <OrderCard
+            key={order.id}
+            order={order}
+            pending={pending}
+            selectionEnabled={selectionEnabled}
+            selected={selectedIds.includes(order.id)}
+            onToggleSelected={onToggleSelected}
+            onSelect={onSelect}
+            onOpenHistory={onOpenHistory}
+            onOpenCustomer={onOpenCustomer}
+            onTransition={onTransition}
+          />
+        )) : <div className="col-span-full"><VisualEmptyState kind="orders" compact title="No orders match this view" detail="Clear a filter or book the first order for this branch." /></div>}
+      </div>
+    );
+  }
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[870px] text-left text-sm">
+      <table className="w-full min-w-[940px] text-left text-sm">
         <thead className="bg-[#fafaf7] text-[10px] font-bold uppercase tracking-[.14em] text-[#718087]">
           <tr>
             <th className="px-5 py-3">Invoice / order</th>
             <th className="px-3 py-3">Customer</th>
             <th className="px-3 py-3">Dates</th>
             <th className="px-3 py-3">Amount</th>
+            <th className="px-3 py-3">Source</th>
             <th className="px-3 py-3">Status</th>
-            <th className="px-5 py-3 text-right">Action</th>
+            <th className="px-5 py-3 text-right">Order actions</th>
           </tr>
         </thead>
         <tbody>
           {loading ? (
             <tr>
-              <td colSpan={6} className="py-16 text-center">
+              <td colSpan={7} className="py-16 text-center">
                 <Loader2 className="mx-auto h-5 w-5 animate-spin text-[#3a7d78]" />
               </td>
             </tr>
@@ -627,14 +994,18 @@ function OrderTable({
                 key={order.id}
                 order={order}
                 pending={pending}
+                selectionEnabled={selectionEnabled}
+                selected={selectedIds.includes(order.id)}
+                onToggleSelected={onToggleSelected}
                 onSelect={onSelect}
+                onOpenHistory={onOpenHistory}
                 onOpenCustomer={onOpenCustomer}
                 onTransition={onTransition}
               />
             ))
           ) : (
             <tr>
-              <td colSpan={6} className="text-center">
+              <td colSpan={7} className="text-center">
                 <VisualEmptyState kind="orders" compact title="No orders match this view" detail="Clear a filter or book the first order for this branch." />
               </td>
             </tr>
@@ -647,36 +1018,37 @@ function OrderTable({
 function OrderRow({
   order,
   pending,
+  selectionEnabled,
+  selected,
+  onToggleSelected,
   onSelect,
+  onOpenHistory,
   onOpenCustomer,
   onTransition,
 }: {
   order: LaundryOrder;
   pending: boolean;
+  selectionEnabled: boolean;
+  selected: boolean;
+  onToggleSelected: (id: string) => void;
   onSelect: (id: string) => void;
+  onOpenHistory: (id: string) => void;
   onOpenCustomer: (id: string) => void;
   onTransition: (order: LaundryOrder, next: LaundryState) => void;
 }) {
-  const next = nextLaundryState[order.state];
-  const needsRider = next === "Out for Delivery" && !order.deliveryRider;
   return (
     <tr
       className={cn(
         "border-t border-[#263f44]/8 transition hover:bg-[#f7f8f4]",
       )}
     >
-      <td
-        className="cursor-pointer px-5 py-4"
-        onClick={() => onSelect(order.id)}
-      >
-        <span className="block font-bold text-[#205660]">
-          {order.invoiceNumber || "—"}
-        </span>
-        <span className="text-xs text-[#718087]">
-          {order.orderNumber} · {order.itemCount} items
-        </span>
+      <td className="px-5 py-4">
+        <div className="flex items-center gap-2">
+          {selectionEnabled && isBulkSelectable(order) ? <input type="checkbox" aria-label={`Select order ${order.orderNumber} for bulk status update`} checked={selected} disabled={pending} onChange={() => onToggleSelected(order.id)} className="h-4 w-4 shrink-0 rounded border-[#b7c9c3] accent-[#39786f] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#438b82]" /> : null}
+          <div className="min-w-0"><span className="block font-bold text-[#205660]">{order.invoiceNumber || "—"}</span><span className="text-xs text-[#718087]">{order.orderNumber} · {order.itemCount} items</span></div>
+        </div>
       </td>
-      <td className="cursor-pointer px-3 py-4" onClick={() => onSelect(order.id)}>
+      <td className="px-3 py-4">
         {order.customer.id ? (
           <button
             type="button"
@@ -694,10 +1066,7 @@ function OrderRow({
         )}
         <span className="text-xs text-[#718087]">{order.customer.phone}</span>
       </td>
-      <td
-        className="cursor-pointer px-3 py-4 text-xs text-[#617178]"
-        onClick={() => onSelect(order.id)}
-      >
+      <td className="px-3 py-4 text-xs text-[#617178]">
         <span className="block">Booked {date(order.orderDate)}</span>
         <span className="mt-1 block">
           Due {date(order.expectedDeliveryDate)}
@@ -706,53 +1075,182 @@ function OrderRow({
       <td className="px-3 py-4 font-bold tabular-nums">
         {formatMoney(order.grandTotal)}
       </td>
+      <td className="px-3 py-4 text-xs text-[#617178]">
+        <span className="inline-flex rounded-full bg-[#f2f0fa] px-2 py-1 font-semibold text-[#554b73]">
+          {order.source === "By Store" ? "By-Store" : order.source || "Unknown source"}
+        </span>
+      </td>
       <td className="px-3 py-4">
         <StatePill state={order.state} />
       </td>
       <td className="px-5 py-4 text-right">
-        <div className="flex items-center justify-end gap-2">
-        {order.state === "Ready" ? (
-          <button
-            type="button"
-            disabled={pending}
-            onClick={() => onTransition(order, "Delivered")}
-            title="The customer collected it at the counter"
-            className="rounded-lg border border-[#123039]/20 bg-white px-2.5 py-1.5 text-xs font-bold text-[#17353c] hover:bg-[#f1f4f1]"
-          >
-            Handed over
-          </button>
-        ) : null}
-        {next ? (
-          needsRider ? (
-            <Link
-              to="/laundry/dispatch"
-              className="inline-flex items-center gap-1 rounded-lg bg-[#e7f3ed] px-2.5 py-1.5 text-xs font-bold text-[#2b6c62]"
-            >
-              Assign captain
-              <Truck className="h-3.5 w-3.5" />
-            </Link>
-          ) : (
-            <button
-              disabled={pending}
-              onClick={() => onTransition(order, next)}
-              className="inline-flex items-center gap-1 rounded-lg bg-[#123039] px-2.5 py-1.5 text-xs font-bold text-white hover:bg-[#1d4a53]"
-            >
-              {next}
-              <ChevronRight className="h-3.5 w-3.5" />
-            </button>
-          )
-        ) : (
-          <button
-            onClick={() => onSelect(order.id)}
-            className="text-xs font-bold text-[#39786f]"
-          >
-            View
-          </button>
-        )}
-        </div>
+        <OrderActions order={order} pending={pending} onSelect={onSelect} onOpenHistory={onOpenHistory} onTransition={onTransition} align="right" />
       </td>
     </tr>
   );
+}
+
+function OrderCard({
+  order,
+  pending,
+  selectionEnabled,
+  selected,
+  onToggleSelected,
+  onSelect,
+  onOpenHistory,
+  onOpenCustomer,
+  onTransition,
+}: {
+  order: LaundryOrder;
+  pending: boolean;
+  selectionEnabled: boolean;
+  selected: boolean;
+  onToggleSelected: (id: string) => void;
+  onSelect: (id: string) => void;
+  onOpenHistory: (id: string) => void;
+  onOpenCustomer: (id: string) => void;
+  onTransition: (order: LaundryOrder, next: LaundryState) => void;
+}) {
+  return (
+    <article role="listitem" aria-label={`Order ${order.orderNumber}`} className="min-w-0 rounded-2xl border border-[#263f44]/10 bg-white p-4 shadow-[0_4px_16px_rgba(37,48,43,.04)]">
+      <header className="flex items-start justify-between gap-3 border-b border-[#263f44]/8 pb-3">
+        <div className="flex min-w-0 items-start gap-2">
+          {selectionEnabled && isBulkSelectable(order) ? <input type="checkbox" aria-label={`Select order ${order.orderNumber} for bulk status update`} checked={selected} disabled={pending} onChange={() => onToggleSelected(order.id)} className="mt-1 h-4 w-4 shrink-0 rounded border-[#b7c9c3] accent-[#39786f] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#438b82]" /> : null}
+          <div className="min-w-0">
+          <p className="truncate text-sm font-bold text-[#205660]">{order.invoiceNumber || "No invoice"}</p>
+          <p className="mt-1 truncate text-xs text-[#718087]">{order.orderNumber} · {order.itemCount} items</p>
+          </div>
+        </div>
+        <StatePill state={order.state} />
+      </header>
+      <div className="mt-3">
+        {order.customer.id ? <button type="button" onClick={() => onOpenCustomer(order.customer.id!)} className="block max-w-full truncate text-left text-sm font-semibold text-brand-700 hover:underline">{order.customer.name}</button> : <p className="truncate text-sm font-semibold">{order.customer.name}</p>}
+        <p className="mt-0.5 text-xs text-[#718087]">{order.customer.phone}</p>
+      </div>
+      <dl className="mt-3 grid grid-cols-2 gap-2 rounded-xl bg-[#fafaf7] p-3 text-xs">
+        <div><dt className="text-[10px] font-bold uppercase tracking-wide text-[#718087]">Booked</dt><dd className="mt-1 font-medium text-[#40565a]">{date(order.orderDate)}</dd></div>
+        <div><dt className="text-[10px] font-bold uppercase tracking-wide text-[#718087]">Due</dt><dd className="mt-1 font-medium text-[#40565a]">{date(order.expectedDeliveryDate)}</dd></div>
+        <div><dt className="text-[10px] font-bold uppercase tracking-wide text-[#718087]">Source</dt><dd className="mt-1 truncate font-medium text-[#40565a]">{order.source === "By Store" ? "By-Store" : order.source || "Unknown source"}</dd></div>
+        <div><dt className="text-[10px] font-bold uppercase tracking-wide text-[#718087]">Amount</dt><dd className="mt-1 font-bold tabular-nums text-[#17353c]">{formatMoney(order.grandTotal)}</dd></div>
+      </dl>
+      <OrderActions order={order} pending={pending} onSelect={onSelect} onOpenHistory={onOpenHistory} onTransition={onTransition} />
+    </article>
+  );
+}
+
+function OrderActions({
+  order,
+  pending,
+  onSelect,
+  onOpenHistory,
+  onTransition,
+  align = "left",
+}: {
+  order: LaundryOrder;
+  pending: boolean;
+  onSelect: (id: string) => void;
+  onOpenHistory: (id: string) => void;
+  onTransition: (order: LaundryOrder, next: LaundryState) => void;
+  align?: "left" | "right";
+}) {
+  const next = nextLaundryState[order.state];
+  const needsRider = next === "Out for Delivery" && !order.deliveryRider;
+  return (
+    <div className={cn("mt-3 flex flex-wrap items-center gap-2", align === "right" && "justify-end")}>
+      <button
+        type="button"
+        onClick={() => onOpenHistory(order.id)}
+        aria-label={`Open order history for ${order.invoiceNumber || order.orderNumber}`}
+        title="Open the read-only order status history"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-[#263f44]/15 bg-white px-2.5 py-1.5 text-xs font-bold text-[#514390] hover:bg-[#f0edff] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#664cf0]"
+      >
+        <Eye className="h-3.5 w-3.5" aria-hidden="true" />Order History
+      </button>
+      <button
+        type="button"
+        onClick={() => onSelect(order.id)}
+        aria-label={`Open order summary for ${order.invoiceNumber || order.orderNumber}`}
+        title="Open the order summary and available actions"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-[#263f44]/15 bg-white px-2.5 py-1.5 text-xs font-bold text-[#315d57] hover:bg-[#f1f4f1] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#664cf0]"
+      >
+        <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />Order Summary
+      </button>
+      {order.state === "Ready" ? <button type="button" disabled={pending} onClick={() => onTransition(order, "Delivered")} aria-label={`Mark order ${order.orderNumber} handed over`} title="The customer collected it at the counter" className="rounded-lg border border-[#123039]/20 bg-white px-2.5 py-1.5 text-xs font-bold text-[#17353c] hover:bg-[#f1f4f1]">Handed over</button> : null}
+      {next ? needsRider ? <Link to="/laundry/dispatch" aria-label={`Assign a delivery rider for order ${order.orderNumber}`} className="inline-flex items-center gap-1 rounded-lg bg-[#e7f3ed] px-2.5 py-1.5 text-xs font-bold text-[#2b6c62]">Assign captain<Truck className="h-3.5 w-3.5" /></Link> : <button type="button" disabled={pending} onClick={() => onTransition(order, next)} aria-label={`Move order ${order.orderNumber} to ${next}`} className="inline-flex items-center gap-1 rounded-lg bg-[#123039] px-2.5 py-1.5 text-xs font-bold text-white hover:bg-[#1d4a53]">{next}<ChevronRight className="h-3.5 w-3.5" /></button> : null}
+    </div>
+  );
+}
+
+function BulkOrderStatusDialog({
+  move,
+  pending,
+  onConfirm,
+  onClose,
+}: {
+  move: BulkOrderStatusMove | null;
+  pending: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const label = move?.next === "Ready" ? "Done (Ready)" : "Delivered";
+  const count = move?.orders.length || 0;
+  return (
+    <AlertDialog open={Boolean(move)} onOpenChange={(open) => !open && !pending && onClose()}>
+      <AlertDialogContent className="max-w-lg">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Move {count} {count === 1 ? "order" : "orders"} to {label}?</AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="space-y-3 text-sm text-[#526368]">
+              <p>Each order will use the normal status checks and save its own history entry. If an order changed since it was loaded or is no longer eligible, it will stay unchanged and appear in the result message.</p>
+              {move?.next === "Delivered" ? <p className="rounded-lg bg-[#fff6e1] px-3 py-2 text-xs font-semibold text-[#855815]">This updates delivery status only. Any unpaid balance remains due.</p> : null}
+              {move?.orders.length ? <ul aria-label="Selected orders" className="max-h-32 space-y-1 overflow-y-auto rounded-lg bg-[#f7f8f4] p-3 text-xs font-semibold text-[#315d57]">{move.orders.slice(0, 6).map((order) => <li key={order.id}>{order.orderNumber} · {order.customer.name} · {formatMoney(order.grandTotal)}</li>)}{move.orders.length > 6 ? <li>and {move.orders.length - 6} more…</li> : null}</ul> : null}
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <div className="flex justify-end gap-2">
+          <button type="button" disabled={pending} onClick={onClose} className="rounded-lg border border-[#263f44]/15 bg-white px-3 py-2 text-xs font-bold text-[#40565a] disabled:opacity-50">Cancel</button>
+          <button type="button" disabled={pending || !move?.orders.length} onClick={onConfirm} className="inline-flex items-center gap-1.5 rounded-lg bg-[#123039] px-3 py-2 text-xs font-bold text-white disabled:opacity-50">{pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{pending ? "Updating orders…" : `Confirm ${label}`}</button>
+        </div>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+function OrderHistoryDialog({ id, onClose }: { id: string; onClose: () => void }) {
+  const { drawerRef, initialFocusRef, onKeyDown } = useDrawerFocus();
+  const detail = useQuery({
+    queryKey: ["laundry-order", id],
+    queryFn: () => apiGet<LaundryOrder & { timeline: Array<{ id: string; ts: string; action: string }> }>(`/laundry/orders/${id}`),
+  });
+
+  useEffect(() => {
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onEscape);
+    return () => window.removeEventListener("keydown", onEscape);
+  }, [onClose]);
+
+  const order = detail.data;
+  return <>
+    <button type="button" aria-label="Close order history" onClick={onClose} className="fixed inset-0 z-40 cursor-default bg-[#171024]/65 backdrop-blur-[2px]" />
+    <section ref={drawerRef} onKeyDown={onKeyDown} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="order-history-title" className="fixed inset-x-3 top-1/2 z-50 max-h-[min(82vh,720px)] -translate-y-1/2 overflow-y-auto rounded-[24px] border border-[#272043]/10 bg-[#fffdfb] p-5 shadow-[0_26px_80px_rgba(32,23,60,.3)] animate-in fade-in zoom-in-95 duration-200 sm:inset-x-auto sm:left-1/2 sm:w-[min(92vw,620px)] sm:-translate-x-1/2 sm:p-7">
+      <header className="flex items-start justify-between gap-4 border-b border-[#272043]/10 pb-4">
+        <div>
+          <p className="text-[10px] font-extrabold uppercase tracking-[.17em] text-brand-700">Read-only record</p>
+          <h2 id="order-history-title" className="mt-1 font-serif text-2xl text-[#241a45]">Order history</h2>
+          <p className="mt-1 text-sm text-[#746d82]">{order ? `${order.invoiceNumber || order.orderNumber} · ${order.customer.name}` : "Order status timeline"}</p>
+        </div>
+        <button ref={initialFocusRef} type="button" onClick={onClose} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#272043]/15 bg-white px-3 text-xs font-bold text-[#554d6d] hover:bg-[#f6f4ff] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"><X className="h-3.5 w-3.5" />Close</button>
+      </header>
+      {order ? <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#e5e0f2] bg-[#f8f7fc] px-4 py-3"><span className="text-xs font-semibold text-[#625c75]">Current order status</span><StatePill state={order.state} /></div> : null}
+      <section className="mt-5" aria-label="Order activity timeline">
+        <h3 className="text-sm font-bold text-[#332849]">Order timeline</h3>
+        {detail.isLoading ? <p role="status" className="mt-4 rounded-xl bg-[#f8f7fc] p-4 text-sm text-[#625c75]">Loading order history…</p> : detail.isError ? <p role="status" className="mt-4 rounded-xl bg-rose-50 p-4 text-sm text-rose-700">Order history could not be loaded. Close this window and try again.</p> : order?.timeline.length ? <ol className="mt-4 space-y-3">{order.timeline.map((entry) => <li key={entry.id} className="flex gap-3 rounded-xl border border-[#272043]/8 bg-white px-3 py-3"><span aria-hidden="true" className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-500" /><div><p className="text-sm font-semibold capitalize text-[#3b3253]">{entry.action.replace(/^laundry:/, "").replace(/[:_]/g, " ")}</p><time className="mt-1 block text-xs text-[#7b7488]" dateTime={entry.ts}>{new Date(entry.ts).toLocaleString("en-IN")}</time></div></li>)}</ol> : <p className="mt-4 rounded-xl bg-[#f8f7fc] p-4 text-sm text-[#625c75]">No order history has been recorded yet.</p>}
+      </section>
+      <p className="mt-5 rounded-xl border border-[#e5e0f2] bg-[#f8f7fc] px-3 py-2.5 text-xs text-[#625c75]">This view does not change the order. Use the separate order details view for operational actions.</p>
+    </section>
+  </>;
 }
 type OrderTag = {
   tagNumber: string;
@@ -766,20 +1264,59 @@ type OrderTag = {
 function TraceabilitySummary({ order }: { order: LaundryOrder & { tags?: Array<OrderTag> } }) {
   const expectedPieces = order.items.reduce((sum, item) => /^(piece|pair)$/i.test(item.unit) ? sum + item.qty : sum, 0);
   const units = order.physicalUnits || [];
+  const activeUnits = units.filter((unit) => unit.state !== 'Cancelled');
+  const cancelledUnitCount = units.length - activeUnits.length;
   const containers = order.containers || [];
-  const accounted = expectedPieces === units.length;
+  const accounted = expectedPieces === activeUnits.length;
   return <section className="mt-4 rounded-xl border border-[#39786f]/20 bg-[#f3faf6] p-3">
-    <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="text-[10px] font-bold uppercase tracking-[.15em] text-[#39786f]">Assembly safety · garment traceability</p><p className="mt-1 text-xs text-[#52676b]">{expectedPieces ? `${units.length} of ${expectedPieces} expected piece tags accounted for.` : containers.length ? `${containers.length} explicit container tag${containers.length === 1 ? '' : 's'} accounted for; no piece tags fabricated for bulk lines.` : 'No physical identity has been recorded yet.'}</p></div><span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${accounted ? 'bg-[#dcefe5] text-[#2e6a60]' : 'bg-amber-100 text-amber-800'}`}>{expectedPieces ? accounted ? 'Ready to assemble' : 'Hold · investigate mismatch' : containers.length ? 'Container-controlled' : 'Identity pending'}</span></div>
+    <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="text-[10px] font-bold uppercase tracking-[.15em] text-[#39786f]">Assembly safety · garment traceability</p><p className="mt-1 text-xs text-[#52676b]">{expectedPieces ? `${activeUnits.length} of ${expectedPieces} active piece tags accounted for.${cancelledUnitCount ? ` ${cancelledUnitCount} cancelled historical tag${cancelledUnitCount === 1 ? '' : 's'} remains in history.` : ''}` : containers.length ? `${containers.length} explicit container tag${containers.length === 1 ? '' : 's'} accounted for; no piece tags fabricated for bulk lines.` : 'No physical identity has been recorded yet.'}</p></div><span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${accounted ? 'bg-[#dcefe5] text-[#2e6a60]' : 'bg-amber-100 text-amber-800'}`}>{expectedPieces ? accounted ? 'Ready to assemble' : 'Hold · investigate mismatch' : containers.length ? 'Container-controlled' : 'Identity pending'}</span></div>
     {units.length ? <div className="mt-3 grid gap-2 sm:grid-cols-2">{units.map((unit) => <div key={unit.id} className="rounded-lg border border-[#39786f]/10 bg-white px-2.5 py-2 text-[10px]"><div className="flex items-center justify-between gap-2"><span className="font-mono font-bold text-[#315d57]">{unit.tagCode}</span><span className="rounded-full bg-[#eaf3ef] px-1.5 py-0.5 font-bold text-[#2e6a60]">{unit.state}</span></div><p className="mt-1 truncate text-[#617178]">{unit.garment.name} · {unit.service.name} · {unit.location || 'No location'} · {unit.condition}</p><Link to={`/laundry/garment-tracking?tag=${encodeURIComponent(unit.tagCode)}`} className="mt-1 inline-block font-bold text-[#39786f]">Scan · history · reprint · replace</Link></div>)}</div> : null}
-    <div className="mt-3 flex flex-wrap gap-2"><Link to={`/laundry/garment-tracking?tag=${encodeURIComponent(units[0]?.tagCode || containers[0]?.tagCode || '')}`} className="rounded-lg border border-[#39786f]/20 bg-white px-3 py-1.5 text-[10px] font-bold text-[#39786f]">Open tracking</Link><Link to={`/laundry/print-centre?order=${encodeURIComponent(order.id)}`} className="rounded-lg border border-[#39786f]/20 bg-white px-3 py-1.5 text-[10px] font-bold text-[#39786f]">Open Print Centre</Link></div>
+    <div className="mt-3 flex flex-wrap gap-2"><Link to={`/laundry/garment-tracking?tag=${encodeURIComponent(activeUnits[0]?.tagCode || units[0]?.tagCode || containers[0]?.tagCode || '')}`} className="rounded-lg border border-[#39786f]/20 bg-white px-3 py-1.5 text-[10px] font-bold text-[#39786f]">Open tracking</Link><Link to={`/laundry/print-centre?order=${encodeURIComponent(order.id)}`} className="rounded-lg border border-[#39786f]/20 bg-white px-3 py-1.5 text-[10px] font-bold text-[#39786f]">Open Print Centre</Link></div>
   </section>;
 }
 function OrderWorkCardPage({ id }: { id: string }) {
-  return <Navigate replace to={`/laundry/orders?order=${encodeURIComponent(id)}`} />;
+  const navigate = useNavigate();
+  const detail = useQuery({
+    queryKey: ["laundry-order", id],
+    queryFn: () => apiGet<LaundryOrder & { timeline: Array<{ id: string; ts: string; action: string }>; tags?: Array<OrderTag> }>("/laundry/orders/" + id),
+    retry: false,
+  });
+  const backToOrders = () => navigate("/laundry/orders");
+  if (detail.isError) {
+    const failureKind = orderDetailFailureKind(detail.error);
+    const failureCopy = failureKind === "denied"
+      ? { title: "You don’t have access to this order.", detail: "Your role cannot open this order record. Return to Store Orders or ask an administrator to review your access." }
+      : failureKind === "not-found"
+        ? { title: "This order can’t be found.", detail: "It may have been removed or may belong to another store. Return to Store Orders and search for the order number again." }
+        : { title: "We couldn’t open this order.", detail: "The order may be unavailable, or the service may be temporarily interrupted. Retry once; if it continues, return to Store Orders and search by order number." };
+    return (
+      <section className="mx-auto mt-8 max-w-2xl rounded-2xl border border-rose-200 bg-white p-6 shadow-sm" role="alert">
+        <p className="text-xs font-bold uppercase tracking-[.14em] text-rose-700">Order detail unavailable</p>
+        <h1 className="mt-2 font-serif text-2xl text-[#30265f]">{failureCopy.title}</h1>
+        <p className="mt-2 text-sm leading-6 text-[#625c72]">{failureCopy.detail}</p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {failureKind === "retry" ? <button type="button" onClick={() => void detail.refetch()} className="rounded-lg bg-brand-700 px-4 py-2 text-sm font-bold text-white">Try again</button> : null}
+          <button type="button" onClick={backToOrders} className="rounded-lg border border-[#272043]/15 px-4 py-2 text-sm font-bold text-[#554d6d]">Back to Store Orders</button>
+        </div>
+      </section>
+    );
+  }
+  return (
+    <div className="mx-auto w-full max-w-[1240px] px-3 py-5 sm:px-5 lg:px-8">
+      <OrderDetail order={detail.data} loading={detail.isLoading} onClose={backToOrders} presentation="page" />
+    </div>
+  );
+}
+
+function orderDetailFailureKind(error: unknown): "denied" | "not-found" | "retry" {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (/\b403\b|FORBIDDEN|PERMISSION_DENIED/i.test(message)) return "denied";
+  if (/\b404\b|ORDER_NOT_FOUND/i.test(message)) return "not-found";
+  return "retry";
 }
 
 function OrderWorkCardDrawer({ id, onClose }: { id: string; onClose: () => void }) {
-  const { drawerRef, onKeyDown } = useDrawerFocus();
+  const { drawerRef, initialFocusRef, onKeyDown } = useDrawerFocus();
   const detail = useQuery({
     queryKey: ["laundry-order", id],
     queryFn: () => apiGet<LaundryOrder & { timeline: Array<{ id: string; ts: string; action: string }>; tags?: Array<OrderTag> }>(`/laundry/orders/${id}`),
@@ -794,6 +1331,9 @@ function OrderWorkCardDrawer({ id, onClose }: { id: string; onClose: () => void 
   return <>
     <button type="button" aria-label="Close order work card" onClick={onClose} className="fixed inset-0 z-40 cursor-default bg-[#171024]/65 backdrop-blur-[2px]" />
     <aside ref={drawerRef} onKeyDown={onKeyDown} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Order work card" className="fixed inset-y-0 right-0 z-50 flex w-full flex-col overflow-y-auto border-l border-[#272043]/10 bg-[#fffdfb] px-4 py-5 shadow-[-22px_0_60px_rgba(32,23,60,.22)] animate-in slide-in-from-right duration-300 sm:w-[min(52vw,820px)] sm:min-w-[520px] sm:px-5">
+      <div className="flex shrink-0 justify-end">
+        <button ref={initialFocusRef} type="button" onClick={onClose} aria-label="Close order work card" className="grid h-9 w-9 place-items-center rounded-lg border border-[#272043]/10 bg-white text-[#554d6d] transition hover:bg-brand-50 hover:text-brand-800"><X className="h-4 w-4" /></button>
+      </div>
       <OrderDetail order={detail.data} loading={detail.isLoading} onClose={onClose} presentation="drawer" />
     </aside>
   </>;
@@ -814,6 +1354,23 @@ function OrderDetail({
   presentation?: "panel" | "page" | "drawer";
 }) {
   const client = useQueryClient();
+  const navigate = useNavigate();
+  const savedPriceDetails = order ? summaryRows({
+    subtotal: order.subtotal,
+    charges: order.charges,
+    discounts: order.discounts,
+    taxAmount: order.taxAmount,
+    taxRate: order.taxRate,
+    breakdown: order.breakdown,
+  }).filter((row) => row.kind !== "subtotal") : [];
+  const session = useQuery({
+    queryKey: ["auth-session"],
+    queryFn: () => isWebOnly ? Promise.resolve(sessionFromStoredCloud()) : apiGet<{ user: { roles: string[] } | null }>("/auth/session"),
+  });
+  const roles = session.data?.user?.roles;
+  const canEditOrder = canUseUi(roles, "orders.edit");
+  const canCollectPayment = canUseUi(roles, "payments.collect");
+  const canReversePayment = canUseUi(roles, "payments.refund");
   const [amount, setAmount] = useState("");
   const [mode, setMode] = useState<"Cash" | "UPI" | "Card" | "Bank">("Cash");
   const [cashRegister, setCashRegister] = useState("");
@@ -870,7 +1427,7 @@ function OrderDetail({
           mode,
           reference,
           note,
-          cashRegister: mode === "Cash" ? cashRegister || undefined : undefined,
+          register: mode === "Cash" ? cashRegister || undefined : undefined,
         },
       ),
     onSuccess: () => {
@@ -882,6 +1439,9 @@ function OrderDetail({
       void paymentQuery.refetch();
       client.invalidateQueries({ queryKey: ["laundry-orders"] });
       client.invalidateQueries({ queryKey: ["laundry-order", order?.id] });
+      client.invalidateQueries({ queryKey: ["cash-shift-current"] });
+      client.invalidateQueries({ queryKey: ["cash-shifts"] });
+      client.invalidateQueries({ queryKey: ["cash-close-drill"] });
     },
     onError: (cause) =>
       setError(
@@ -902,6 +1462,9 @@ function OrderDetail({
       void paymentQuery.refetch();
       client.invalidateQueries({ queryKey: ["laundry-orders"] });
       client.invalidateQueries({ queryKey: ["laundry-order", order?.id] });
+      client.invalidateQueries({ queryKey: ["cash-shift-current"] });
+      client.invalidateQueries({ queryKey: ["cash-shifts"] });
+      client.invalidateQueries({ queryKey: ["cash-close-drill"] });
     },
     onError: (cause) =>
       setError(
@@ -1006,22 +1569,21 @@ function OrderDetail({
   const summary = paymentQuery.data;
   return (
     <aside className={cn("h-fit rounded-[22px] border border-[#263f44]/10 bg-[#fffdf8] p-5 shadow-[0_8px_28px_rgba(37,48,43,.05)]", presentation === "page" ? "mx-auto max-w-[1180px]" : presentation === "drawer" ? "border-0 bg-transparent p-0 shadow-none" : "xl:sticky xl:top-24")}>
-      <div className="flex justify-between gap-3">
+      <div className={cn("gap-3", presentation === "page" ? "flex flex-col-reverse sm:flex-row sm:items-start sm:justify-between" : "flex justify-between")}>
         <div>
-          <p className="text-[10px] font-bold uppercase tracking-[.15em] text-[#4d8982]">
-            Order work card
-          </p>
+          <p className="text-[10px] font-bold uppercase tracking-[.15em] text-[#4d8982]">{presentation === "page" ? "Order detail" : "Order work card"}</p>
           <h2 className="mt-1 font-serif text-xl text-[#17353c]">
             {order.orderNumber}
           </h2>
         </div>
-        <div className="flex items-center gap-1">
+        <div className={cn("flex items-center gap-1", presentation === "page" && "justify-end")}>
           <button
             onClick={onClose}
-            className="grid h-8 w-8 place-items-center rounded-lg hover:bg-[#f0eee9]"
+            className={cn("inline-flex h-8 items-center justify-center rounded-lg hover:bg-[#f0eee9]", presentation === "page" ? "gap-1 px-2 text-[#554d6d]" : "w-8")}
             aria-label="Back to Store Orders and Customers"
           >
-            <X className="h-4 w-4" />
+            {presentation === "page" ? <ArrowLeft className="h-4 w-4" /> : <X className="h-4 w-4" />}
+            {presentation === "page" ? <span className="text-xs font-semibold">Back to Store Orders</span> : null}
           </button>
         </div>
       </div>
@@ -1032,30 +1594,84 @@ function OrderDetail({
         </div>
         <StatePill state={order.state} />
       </div>
+      {presentation === "page" ? (
+        <>
+          <section aria-label="Order summary" className="mt-4 rounded-xl border border-[#263f44]/10 bg-white p-4">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-[#17353c]">Order summary</h3>
+                <p className="mt-1 text-xs text-[#718087]">Customer, booking, and fulfilment details saved with this order.</p>
+              </div>
+              <span className="rounded-full bg-[#eaf3ef] px-2.5 py-1 text-[10px] font-bold text-[#39786f]">{order.fulfillmentMode}</span>
+            </div>
+            <dl className="mt-4 grid gap-x-5 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
+              <OrderDetailField label="Invoice number" value={order.invoiceNumber || "Not issued"} />
+              <OrderDetailField label="Order date" value={formatDate(order.orderDate)} />
+              <OrderDetailField label="Expected delivery" value={formatDate(order.expectedDeliveryDate)} />
+              <OrderDetailField label="Source" value={order.source || "Not recorded"} />
+              <OrderDetailField label="Reported by" value={order.reportedBy || "Not recorded"} />
+              <OrderDetailField label="Payment method" value={order.paymentMode || "Not recorded"} />
+              <OrderDetailField label="Payment status" value={summary?.status || order.paymentStatus || "Not recorded"} />
+              <OrderDetailField label="Pickup slot" value={order.pickupSlot || "Not scheduled"} />
+              <OrderDetailField label="Delivery slot" value={order.deliverySlot || "Not scheduled"} />
+              <OrderDetailField label="Service zone" value={order.serviceZone || "Not assigned"} />
+              <div className="sm:col-span-2 xl:col-span-3">
+                <OrderDetailField label="Delivery address" value={order.deliveryAddress || "No delivery address recorded"} />
+              </div>
+            </dl>
+          </section>
+
+          <section aria-label="Order financial summary" className="mt-3 rounded-xl border border-[#263f44]/10 bg-white p-4">
+            <h3 className="text-sm font-bold text-[#17353c]">Price summary</h3>
+            <p className="mt-1 text-xs text-[#718087]">Saved order amounts from the order record.</p>
+            <dl className="mt-3 grid grid-cols-2 gap-x-5 gap-y-2 text-xs sm:grid-cols-3 xl:grid-cols-6">
+              <OrderDetailField label="Subtotal" value={formatMoney(order.subtotal)} />
+              <OrderDetailField label="Charges" value={formatMoney(order.charges)} />
+              <OrderDetailField label="Discounts" value={formatMoney(order.discounts)} />
+              <OrderDetailField label="GST rate" value={`${Number(order.taxRate).toLocaleString("en-IN")}%`} />
+              <OrderDetailField label="GST amount" value={formatMoney(order.taxAmount)} />
+              <div className="rounded-lg bg-[#eaf3ef] px-2.5 py-2">
+                <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#39786f]">Grand total</dt>
+                <dd className="mt-1 font-bold tabular-nums text-[#17353c]">{formatMoney(order.grandTotal)}</dd>
+              </div>
+            </dl>
+            {savedPriceDetails.length ? (
+              <ul aria-label="Applied price details" className="mt-3 space-y-1.5 border-t border-[#263f44]/8 pt-3 text-xs">
+                {savedPriceDetails.map((row) => (
+                  <li key={row.key} className="flex items-start justify-between gap-3 text-[#52676b]">
+                    <span>{row.label}</span>
+                    <span className="shrink-0 font-semibold tabular-nums text-[#17353c]">{row.kind === "discount" ? "−" : ""}{formatMoney(row.amount)}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </section>
+
+          <section aria-label="Order notes and photo" className="mt-3 rounded-xl border border-[#263f44]/10 bg-white p-4">
+            <h3 className="text-sm font-bold text-[#17353c]">Notes and photo</h3>
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-[#52676b]">{order.notes?.trim() || "No order notes recorded."}</p>
+            {order.photoPaths ? <img src={order.photoPaths} alt={`Attached photo for order ${order.orderNumber}`} className="mt-3 h-28 w-28 rounded-lg object-cover ring-1 ring-[#263f44]/10" /> : <p className="mt-2 text-xs text-[#718087]">No order photo attached.</p>}
+          </section>
+        </>
+      ) : null}
       <div className="mt-3 grid grid-cols-2 gap-2">
-        {!["Delivered", "Cancelled"].includes(order.state) ? (
+        {canEditOrder && !["Delivered", "Cancelled"].includes(order.state) ? (
           <button
             type="button"
             onClick={() => {
-              setEditingOrder(true);
-              setEditLines(
-                order.items.map((item) => ({
-                  garment: item.garment || "",
-                  service: item.service || "",
-                  qty: String(item.qty),
-                })),
-              );
-              setError("");
+              const params = new URLSearchParams({ edit: order.id });
+              if (presentation === "page") params.set("returnTo", `/laundry/orders/${order.id}`);
+              navigate(`/laundry/new-order?${params.toString()}`);
             }}
             className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-[#39786f]/25 bg-[#eaf3ef] px-3 py-2 text-xs font-bold text-[#39786f]"
           >
             <Pencil className="h-3.5 w-3.5" />
-            Edit items
+            Edit in order builder
           </button>
         ) : (
           <span />
         )}
-        {!["Delivered", "Cancelled"].includes(order.state) ? (
+        {canEditOrder && !["Delivered", "Cancelled"].includes(order.state) ? (
           <button
             type="button"
             disabled={cancelOrder.isPending}
@@ -1070,7 +1686,7 @@ function OrderDetail({
           </button>
         ) : null}
       </div>
-      {showCancel ? (
+      {canEditOrder && showCancel ? (
         <section className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3">
           <p className="text-xs font-bold text-rose-800">Cancellation reason required</p>
           <textarea value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} placeholder="Explain why this order is being cancelled" className="mt-2 min-h-16 w-full rounded-lg border border-rose-200 bg-white p-2 text-xs outline-none focus:border-rose-400" />
@@ -1087,8 +1703,9 @@ function OrderDetail({
               <span>
                 <span className="block font-medium">{item.garmentName}</span>
                 <span className="text-xs text-[#718087]">
-                  {item.serviceName} · {item.qty} {item.unit.toLowerCase()}
+                  {item.serviceName} · {item.qty} {item.unit.toLowerCase()}{presentation === "page" ? ` × ${formatMoney(item.rate)} each` : ""}
                 </span>
+                {(item.color || item.garmentType) ? <span className="mt-1 block text-[11px] font-semibold text-[#4d706d]">{[item.color, item.garmentType].filter(Boolean).join(' · ')}</span> : null}
               </span>
               <span className="font-bold tabular-nums">
                 {formatINR(item.amount)}
@@ -1117,7 +1734,7 @@ function OrderDetail({
         ))}
       </div>
       <TraceabilitySummary order={order} />
-      {editingOrder ? (
+      {canEditOrder && editingOrder ? (
         <section className="mt-3 rounded-xl border border-[#39786f]/20 bg-[#f3faf6] p-3">
           <p className="text-[10px] font-bold uppercase tracking-[.15em] text-[#39786f]">
             Controlled edit
@@ -1184,6 +1801,7 @@ function OrderDetail({
           />
         )}
         <div className="mt-3 border-t border-dashed border-[#263f44]/10 pt-3">
+          {canEditOrder ? <>
           <p className="text-xs font-semibold text-[#40565a]">
             Record item progress
           </p>
@@ -1241,6 +1859,7 @@ function OrderDetail({
           >
             {fulfilment.isPending ? "Saving…" : "Save progress event"}
           </button>
+          </> : <p className="text-[10px] text-[#819094]">Progress entry is available to staff with order edit access.</p>}
           {fulfilmentQuery.data?.length ? (
             <div className="mt-2 space-y-1">
               {fulfilmentQuery.data
@@ -1331,7 +1950,7 @@ function OrderDetail({
             </div>
           </div>
         )}
-        {summary?.outstanding ? (
+        {summary?.outstanding && canCollectPayment ? (
           <>
             <div className="mt-3 grid grid-cols-2 gap-2">
               <label className="text-[10px] font-bold uppercase tracking-[.12em] text-[#6d6594]">
@@ -1395,6 +2014,8 @@ function OrderDetail({
               Record collection
             </button>
           </>
+        ) : summary?.outstanding ? (
+          <p className="mt-3 rounded-lg bg-white p-2 text-xs text-[#756e9a]">{formatMoney(summary.outstanding)} remains due. Ask counter staff to record a collection.</p>
         ) : (
           <p className="mt-3 rounded-lg bg-white p-2 text-xs font-semibold text-[#4b3bb0]">
             This invoice is fully settled.
@@ -1415,7 +2036,7 @@ function OrderDetail({
                     {payment.providerStatus}
                   </span>
                 </span>
-                <button
+                {canReversePayment ? <button
                   type="button"
                   disabled={reverse.isPending}
                   onClick={() => {
@@ -1428,9 +2049,9 @@ function OrderDetail({
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   Reverse
-                </button>
+                </button> : null}
               </div>
-              {reverseTarget === payment.id ? (
+              {canReversePayment && reverseTarget === payment.id ? (
                 <div className="rounded-lg border border-rose-200 bg-rose-50 p-2">
                   <input value={reverseReason} onChange={(event) => setReverseReason(event.target.value)} placeholder="Reason for reversal" className="h-8 w-full rounded-md border border-rose-200 bg-white px-2 text-xs outline-none focus:border-rose-400" />
                   <div className="mt-2 flex gap-2"><button type="button" onClick={() => setReverseTarget(null)} className="flex-1 rounded-md border border-rose-200 bg-white px-2 py-1.5 text-[10px] font-bold text-rose-700">Keep payment</button><button type="button" disabled={reverse.isPending || !reverseReason.trim()} onClick={() => reverse.mutate({ id: payment.id, reason: reverseReason.trim() })} className="flex-1 rounded-md bg-rose-700 px-2 py-1.5 text-[10px] font-bold text-white disabled:opacity-50">{reverse.isPending ? "Reversing…" : "Confirm reversal"}</button></div>
@@ -1471,6 +2092,14 @@ function OrderDetail({
         </div>
       </div>
     </aside>
+  );
+}
+function OrderDetailField({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-lg bg-[#f8faf9] px-2.5 py-2">
+      <dt className="text-[10px] font-semibold uppercase tracking-wide text-[#718087]">{label}</dt>
+      <dd className="mt-1 break-words text-xs font-semibold text-[#33494d]">{value}</dd>
+    </div>
   );
 }
 function StatePill({ state }: { state: LaundryState }) {

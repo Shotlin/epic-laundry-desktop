@@ -1,5 +1,7 @@
 # Epic Laundry phase status
 
+> **Historical implementation-tranche ledger.** These 12 foundational build phases use the earlier security/data implementation plan and are not the same phase sequence as the current 16-phase MyUniClean parity and launch-readiness roadmap. A `Complete` entry below records that earlier tranche's acceptance checks only; it does not mean the corresponding current parity phase or the overall product goal is complete. Use [the current 16-phase roadmap](../myuniclean-16-phase-execution-roadmap.md) for current project status.
+
 | Phase | Name | Status | Gate evidence |
 |---:|---|---|---|
 | 1 | Baseline, evidence map and regression harness | Complete | All nine existing laundry routes loaded in browser smoke; regression fixture, evidence map and phase documents exist; builds/self-test/typecheck/Electron pack passed. |

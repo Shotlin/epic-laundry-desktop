@@ -7,7 +7,7 @@
 
 export type Real = {
   get: (path: string) => Promise<any>
-  post: (path: string, body?: unknown) => Promise<any>
+  post: (path: string, body?: unknown, options?: { idempotencyKey?: string }) => Promise<any>
   put: (path: string, body?: unknown) => Promise<any>
   patch: (path: string, body?: unknown) => Promise<any>
   del: (path: string) => Promise<any>

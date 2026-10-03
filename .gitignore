@@ -19,6 +19,7 @@ demo-runtime/
 # test output
 /test-results/
 /webapp/test-results/
+/webapp/test-results-*/
 
 # Web build output is emitted into the server's local static directory. It is
 # reproducibly built from webapp/ for Docker and Electron packages; source assets
@@ -43,3 +44,21 @@ shotlinXchat/
 
 # website build
 webapp/dist/
+
+# Private local source material and captured third-party account screenshots.
+/_source_review/
+/artifacts/
+
+# Local credentials, signing material and databases must not enter releases.
+.env
+.env.*
+!.env.example
+!.env.*.example
+.env.local
+.env.*.local
+*.pem
+*.pfx
+*.p12
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { apiGet, apiPatch, apiPost, operatorErrorMessage } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { canUseUi } from '@/components/laundry/LaundryShell'
+import { canUseUi } from '@/lib/permissions'
 import VisualEmptyState from '@/components/laundry/VisualEmptyState'
 
 // Mirrors cloud-catalogue.ts's real response shape exactly — only ever
@@ -30,7 +30,7 @@ export default function LaundryMarketplaceCatalogue() {
   const cloud = useQuery({ queryKey: ['marketplace-cloud-status'], queryFn: () => apiGet<CloudStatus>('/marketplace/cloud/status'), staleTime: 10_000 })
   const catalogue = useQuery({ queryKey: ['marketplace-cloud-catalogue'], queryFn: () => apiGet<CatalogueItem[]>('/marketplace/cloud/catalogue'), enabled: Boolean(cloud.data?.connected && cloud.data?.remoteVendorId), staleTime: 10_000 })
 
-  const canEdit = canUseUi(session.data?.user?.roles, 'catalogue.read')
+  const canManage = canUseUi(session.data?.user?.roles, 'catalogue.manage')
   const cloudReady = Boolean(cloud.data?.connected && cloud.data?.remoteVendorId)
   const cloudBlocker = !cloud.isLoading && !cloud.data?.configured ? 'Marketplace connector is not configured for this workspace.'
     : !cloud.isLoading && !cloud.data?.connected ? 'Connect this store to its marketplace account to see real pricing and stock.'
@@ -71,7 +71,7 @@ export default function LaundryMarketplaceCatalogue() {
     </section>
 
     {cloudBlocker ? <div className="mt-5 flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-xl border border-[#263f44]/10 bg-[#eef2f0] px-3 py-2.5 text-xs font-semibold text-[#53676a]"><CircleOff className="h-3.5 w-3.5 shrink-0" /><span>{cloudBlocker}</span><Link to="/laundry/sync-status" className="underline decoration-[#39786f]/40 underline-offset-2 hover:text-[#2e6a60]">Open marketplace sync</Link></div> : null}
-    {!session.isLoading && !canEdit ? <div className="mt-5 rounded-xl border border-[#263f44]/10 bg-[#edf3f0] px-3 py-2.5 text-xs font-semibold text-[#53676a]">Read-only view. An owner or counter operator with catalogue access can edit pricing here.</div> : null}
+    {!session.isLoading && !canManage ? <div className="mt-5 rounded-xl border border-[#263f44]/10 bg-[#edf3f0] px-3 py-2.5 text-xs font-semibold text-[#53676a]">Read-only view. Ask an owner to manage marketplace prices, stock, and availability.</div> : null}
     {update.isError || updateStock.isError ? <div role="alert" className="mt-4 flex items-start gap-2 rounded-xl bg-[#fde9e6] px-3 py-2.5 text-sm text-[#a44036]"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{operatorErrorMessage(update.error || updateStock.error, 'The catalogue update failed. Refresh and try again.')}</div> : null}
     {notice ? <div role="status" className="mt-4 rounded-xl bg-[#e8f3ee] px-3 py-2.5 text-xs font-semibold text-[#2e6a60]">{notice}</div> : null}
 
@@ -88,7 +88,7 @@ export default function LaundryMarketplaceCatalogue() {
 
       <aside className="rounded-[22px] border border-[#173f46]/12 bg-[#173f46] text-[#f8faf5] shadow-[0_18px_42px_rgba(23,63,70,.16)]" aria-label="Catalogue item detail">
         {!selected ? <div className="grid min-h-[420px] place-items-center p-8 text-center"><Package className="h-8 w-8 text-[#8fb2a8]" /><p className="mt-3 font-serif text-xl">Select an item</p><p className="mt-1 max-w-xs text-sm leading-6 text-[#b3c8c1]">Pick a service to edit its real marketplace price, stock, and availability.</p></div> : <ItemDetail
-          item={selected} canEdit={canEdit}
+          item={selected} canEdit={canManage}
           onSaveFields={(patch) => update.mutate({ id: selected.id, patch })}
           onSaveStock={(stockQuantity) => updateStock.mutate({ id: selected.id, stockQuantity })}
           pending={update.isPending || updateStock.isPending}
@@ -96,7 +96,7 @@ export default function LaundryMarketplaceCatalogue() {
       </aside>
     </div>
 
-    {cloudReady ? <ServiceRequestSection canEdit={canEdit} /> : null}
+    {cloudReady ? <ServiceRequestSection canEdit={canManage} /> : null}
   </div>
 }
 

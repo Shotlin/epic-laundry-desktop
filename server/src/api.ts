@@ -49,9 +49,9 @@ import {
 } from './modules/crm/engagement.js';
 import { dashboardSummary } from './modules/analytics/dashboard.js';
 import {
-  applyLaundryGarmentBackfill, assignLaundryOrder, bookLaundryOrder, cancelLaundryExpense, cancelLaundryOrder, createLaundryExpense, createLaundryRider, editLaundryExpense, editLaundryOrder, getLaundryOrder, importLaundryCatalogue, importLaundryCustomers, importLaundryPrices, laundryCatalogue, laundryDashboard, listLaundryFulfillment, recordLaundryFulfillment, listLaundryGarmentUnits, getLaundryGarmentUnit, previewLaundryGarmentBackfill, scanLaundryGarment, scanLaundryContainer, getLaundryContainerDetail, reprintLaundryTag, replaceLaundryTag, createLaundryPrintJob, listLaundryPrintJobs, LaundryDomainError, TagRetiredError,
-  laundryDispatch, laundryReportDetail, laundryReports, laundryStatistics, listLaundryExpenses, listLaundryImportJobs, listLaundryOrderPage, listLaundryOrders, listLaundryRiderSettlements, listLaundryRiders, quoteLaundryOrder, saveLaundryCategory, saveLaundryChargeRule, saveLaundryDiscountRule,
-  saveLaundryGarment, saveLaundryPrice, saveLaundryRiderSettlement, saveLaundryService, saveLaundryTaxRule, searchLaundryCustomers, seedLaundryDefaults, transitionLaundryOrder,
+  applyLaundryGarmentBackfill, assignLaundryOrder, bookLaundryOrder, cancelLaundryExpense, cancelLaundryOrder, createLaundryExpense, createLaundryRider, editLaundryExpense, editLaundryOrder, getLaundryOrder, importLaundryCatalogue, importLaundryCustomers, importLaundryPrices, previewLaundryImport, laundryCatalogue, laundryDashboard, listLaundryFulfillment, recordLaundryFulfillment, listLaundryGarmentUnits, getLaundryGarmentUnit, previewLaundryGarmentBackfill, scanLaundryGarment, scanLaundryContainer, getLaundryContainerDetail, reprintLaundryTag, replaceLaundryTag, createLaundryPrintJob, listLaundryPrintJobs, LaundryDomainError, TagRetiredError,
+  isLaundryReportLocked, laundryDispatch, laundryReportChart, laundryReportDetail, laundryReports, laundryStatistics, listLaundryCategories, listLaundryChargeRules, listLaundryDiscountRules, listLaundryExpenses, listLaundryImportJobs, listLaundryOrderFilterOptions, listLaundryOrderPage, listLaundryOrders, listLaundryRiderSettlements, listLaundryRiders, listLaundryServices, listLaundryServiceUnits, quoteLaundryOrder, saveLaundryCategory, saveLaundryChargeRule, saveLaundryDiscountRule,
+  createLaundryGarmentWithPrice, saveLaundryGarment, saveLaundryPrice, saveLaundryRiderSettlement, saveLaundryService, saveLaundryServiceUnit, saveLaundryTaxRule, searchLaundryCustomers, seedLaundryDefaults, setLaundryServiceUnitActive, transitionLaundryOrder,
 } from './modules/laundry/domain.js';
 import { adjustRewards, applyWalletCommand, archiveLaundryCustomerAddress, createLaundryCustomer, customerProfile, customerRetentionInsights, listLaundryCustomerAddresses, listOnlineOnlyCustomers, saveLaundryCustomerAddress, updateLaundryCustomer } from './modules/laundry/customers.js';
 import { collectServicePackagePayment, createServicePackage, customerPackages, listServicePackages, packageLiability, purchaseServicePackage, redeemServicePackage } from './modules/laundry/packages.js';
@@ -63,6 +63,9 @@ import { applyProductionWorkloadRecommendations, assignProductionTask, listProdu
 import { listCustomerCorrections, listQualityClaims, openQualityClaim, qualityAnalytics, resolveQualityClaim } from './modules/laundry/quality.js';
 import { laundryManagementSnapshot, laundryWorkforceDashboard, markLaundryAttendance } from './modules/laundry/management.js';
 import { listLaundryReturns, requestLaundryReturn } from './modules/laundry/returns.js';
+import { listLaundryMessageTemplates, saveLaundryMessageTemplate, setLaundryMessageTemplateActive } from './modules/laundry/message-templates.js';
+import { createOrderNoSeries, listOrderNoSeries } from './modules/laundry/order-no-series.js';
+import { createStorePackage, listStorePackages } from './modules/laundry/store-packages.js';
 import { entityFinanceProfile, financePolicyReadiness, installIndia2026Baseline, listRegulatoryPolicies, saveEntityFinanceProfile } from './modules/finance/regulatory-policy.js';
 import { calculatePayrollPreview } from './modules/finance/payroll-engine.js';
 import { financeCommandCenter } from './modules/finance/intelligence.js';
@@ -792,15 +795,68 @@ export function registerApi(app: FastifyInstance) {
   app.get('/api/settings/store', { preHandler: [guard, allow('settings.manage')] }, async (req: any) =>
     inStore(req, () => store.getStoreSettings(req.auth!.tenant, req.auth!.storeId)),
   );
+  app.get('/api/settings/order-no-series', { preHandler: [guard, allow('settings.manage')] }, async (req: any) =>
+    inStore(req, () => listOrderNoSeries(req.auth!.tenant, req.auth!.storeId)),
+  );
+  app.post('/api/settings/order-no-series', {
+    schema: { body: { type: 'object', required: ['name', 'prefix'], properties: { name: { type: 'string', minLength: 1, maxLength: 100 }, prefix: { type: 'string', minLength: 1, maxLength: 20 } }, additionalProperties: false } },
+    preHandler: [guard, allow('settings.manage')],
+  }, async (req: any, rep: any) => {
+    try { return inStore(req, () => createOrderNoSeries(req.auth!.tenant, req.auth!.actor, req.body, req.auth!.storeId)); }
+    catch (error: any) { return rep.code(400).send({ error: error.message }); }
+  });
+  app.get('/api/settings/store-packages', { preHandler: [guard, allow('settings.manage')] }, async (req: any) =>
+    inStore(req, () => listStorePackages(req.auth!.tenant, req.auth!.storeId)),
+  );
+  app.post('/api/settings/store-packages', {
+    schema: { body: {
+      type: 'object', required: ['name', 'amount', 'serviceIds'],
+      properties: {
+        name: { type: 'string', minLength: 1, maxLength: 100 },
+        amount: { type: 'number', minimum: 0 },
+        serviceIds: { type: 'array', maxItems: 100, uniqueItems: true, items: { type: 'string', minLength: 1, maxLength: 120 } },
+        limitsEnabled: { type: 'boolean' },
+        serviceLimits: { type: 'array', maxItems: 100, items: {
+          type: 'object', required: ['serviceId', 'quantityLimit', 'amountLimit'],
+          properties: {
+            serviceId: { type: 'string', minLength: 1, maxLength: 120 },
+            quantityLimit: { type: 'number', minimum: 0 },
+            amountLimit: { type: 'number', minimum: 0 },
+          }, additionalProperties: false,
+        } },
+      }, additionalProperties: false,
+    } },
+    preHandler: [guard, allow('settings.manage')],
+  }, async (req: any, rep: any) => {
+    try { return inStore(req, () => createStorePackage(req.auth!.tenant, req.auth!.actor, req.body, req.auth!.storeId)); }
+    catch (error: any) { return rep.code(400).send({ error: error.message }); }
+  });
   app.post('/api/settings/store', { preHandler: [guard, allow('settings.manage')] }, async (req: any, rep: any) => {
     try {
       return inStore(req, () => {
         const before = store.getStoreSettings(req.auth!.tenant, req.auth!.storeId);
-        const next = store.saveStoreSettings(req.auth!.tenant, req.auth!.actor, req.body as any, req.auth!.storeId);
+        const input = { ...(req.body || {}) };
+        delete input.storePackages;
+        const next = store.saveStoreSettings(req.auth!.tenant, req.auth!.actor, input as any, req.auth!.storeId);
         audit(req.auth!.tenant, req.auth!.actor, 'settings:store-updated', { entity: 'store_settings', row_id: req.auth!.storeId, before, after: next });
         return next;
       });
     } catch (error: any) { return rep.code(400).send({ error: error.message }); }
+  });
+  app.get('/api/laundry/message-templates', { preHandler: [guard, allow('settings.manage')] }, async (req: any) =>
+    inStore(req, () => listLaundryMessageTemplates(req.auth!.tenant)),
+  );
+  app.patch('/api/laundry/message-templates/:key', { preHandler: [guard, allow('settings.manage')] }, async (req: any, rep: any) => {
+    try { return inStore(req, () => saveLaundryMessageTemplate(req.auth!.tenant, req.auth!.actor, req.params.key, req.body?.body)); }
+    catch (error: any) { return rep.code(400).send({ error: error.message }); }
+  });
+  app.post('/api/laundry/message-templates/:key/archive', { preHandler: [guard, allow('settings.manage')] }, async (req: any, rep: any) => {
+    try { return inStore(req, () => setLaundryMessageTemplateActive(req.auth!.tenant, req.auth!.actor, req.params.key, false)); }
+    catch (error: any) { return rep.code(400).send({ error: error.message }); }
+  });
+  app.post('/api/laundry/message-templates/:key/restore', { preHandler: [guard, allow('settings.manage')] }, async (req: any, rep: any) => {
+    try { return inStore(req, () => setLaundryMessageTemplateActive(req.auth!.tenant, req.auth!.actor, req.params.key, true)); }
+    catch (error: any) { return rep.code(400).send({ error: error.message }); }
   });
   app.get('/api/settings/setup-progress', { preHandler: [guard, allow('settings.manage')] }, async (req: any) =>
     inStore(req, () => store.getStoreSettings(req.auth!.tenant, req.auth!.storeId).setupProgress),
@@ -821,6 +877,22 @@ export function registerApi(app: FastifyInstance) {
 
   // ---- Laundry desk: dedicated domain API, kept separate from generic ERP screens ----
   app.get('/api/laundry/catalogue', { preHandler: [guard, allow('catalogue.read')] }, async (req: any) => inStore(req, () => laundryCatalogue(req.auth!.tenant)));
+  app.get('/api/laundry/settings/service-units', { preHandler: [guard, allow('settings.manage')] }, async (req: any) => inStore(req, () => listLaundryServiceUnits(req.auth!.tenant)));
+  app.get('/api/laundry/settings/categories', { preHandler: [guard, allow('settings.manage')] }, async (req: any) => inStore(req, () => listLaundryCategories(req.auth!.tenant)));
+  app.get('/api/laundry/settings/services', { preHandler: [guard, allow('settings.manage')] }, async (req: any) => inStore(req, () => listLaundryServices(req.auth!.tenant)));
+  app.post('/api/laundry/settings/service-units', { preHandler: [guard, allow('settings.manage')] }, async (req: any, rep: any) => {
+    try { return rep.code(201).send(inStore(req, () => saveLaundryServiceUnit(req.auth!.tenant, req.auth!.actor, req.body as any))); }
+    catch (error: any) { return rep.code(400).send({ error: error.message }); }
+  });
+  app.patch('/api/laundry/settings/service-units/:id', { preHandler: [guard, allow('settings.manage')] }, async (req: any, rep: any) => {
+    try {
+      return inStore(req, () => typeof req.body?.active === 'boolean'
+        ? setLaundryServiceUnitActive(req.auth!.tenant, req.auth!.actor, req.params.id, req.body.active)
+        : saveLaundryServiceUnit(req.auth!.tenant, req.auth!.actor, req.body as any, req.params.id));
+    } catch (error: any) { return rep.code(400).send({ error: error.message }); }
+  });
+  app.get('/api/laundry/catalogue/charges', { preHandler: [guard, allow('catalogue.manage')] }, async (req: any) => inStore(req, () => listLaundryChargeRules(req.auth!.tenant)));
+  app.get('/api/laundry/catalogue/discounts', { preHandler: [guard, allow('catalogue.manage')] }, async (req: any) => inStore(req, () => listLaundryDiscountRules(req.auth!.tenant)));
   app.get('/api/laundry/search', { schema: { querystring: laundrySearchQuery }, preHandler: [guard, allowAny('orders.read', 'customers.read', 'garments.read', 'settings.manage')] }, async (req: any) => inStore(req, () => searchLaundryWorkspace(req.auth!.tenant, (req.query as any)?.q, {
     customers: can(req.auth!, 'customers.read'), orders: can(req.auth!, 'orders.read'), garments: can(req.auth!, 'garments.read'), settlements: can(req.auth!, 'settings.manage'),
   })));
@@ -855,6 +927,11 @@ export function registerApi(app: FastifyInstance) {
   app.patch('/api/laundry/catalogue/prices/:id', { preHandler: [guard, allow('catalogue.manage')] }, async (req: any, rep: any) => {
     try { return inStore(req, () => saveLaundryPrice(req.auth!.tenant, req.auth!.actor, req.body as any, req.params.id)); }
     catch (error: any) { return rep.code(400).send({ error: error.message }); }
+  });
+  app.post('/api/laundry/catalogue/quick-add', { preHandler: [guard, allow('catalogue.manage')] }, async (req: any, rep: any) => {
+    try {
+      return rep.code(201).send(inStore(req, () => idempotent(req, 'laundry.catalogue-quick-add', () => createLaundryGarmentWithPrice(req.auth!.tenant, req.auth!.actor, req.body as any))));
+    } catch (error: any) { return rep.code(400).send({ error: error.message }); }
   });
   app.post('/api/laundry/catalogue/charges', { preHandler: [guard, allow('catalogue.manage')] }, async (req: any, rep: any) => {
     try { return rep.code(201).send(inStore(req, () => saveLaundryChargeRule(req.auth!.tenant, req.auth!.actor, req.body as any))); }
@@ -1429,6 +1506,7 @@ export function registerApi(app: FastifyInstance) {
     catch (error: any) { return rep.code(400).send({ error: error.message }); }
   });
   app.get('/api/laundry/orders', { preHandler: [guard, allow('orders.read')] }, async (req: any) => inStore(req, () => (req.query?.page !== undefined || req.query?.pageSize !== undefined || req.query?.cursor !== undefined ? listLaundryOrderPage(req.auth!.tenant, req.query as any) : listLaundryOrders(req.auth!.tenant, req.query as any))));
+  app.get('/api/laundry/orders/filter-options', { preHandler: [guard, allow('orders.read')] }, async (req: any) => inStore(req, () => listLaundryOrderFilterOptions(req.auth!.tenant)));
   app.get('/api/laundry/orders/:id', { schema: { params: laundryIdParams }, preHandler: [guard, allow('orders.read')] }, async (req: any, rep: any) => {
     try { return inStore(req, () => getLaundryOrder(req.auth!.tenant, req.params.id)); }
     catch (error: any) { return rep.code(404).send({ error: error.message }); }
@@ -1599,12 +1677,12 @@ export function registerApi(app: FastifyInstance) {
   app.post('/api/laundry/routes/:id/start', { preHandler: [guard, allowAny('routes.manage', 'routes.manage.assigned')] }, async (req: any, rep: any) => {
     if (req.auth!.roles.includes('rider') && !req.auth!.riderId) return rep.code(403).send({ error: 'rider account is not linked to an active rider record' });
     try { return inStore(req, () => idempotent(req, `laundry.route-start:${req.params.id}`, () => startRouteRun(req.auth!.tenant, req.auth!.actor, req.params.id, req.auth!.roles.includes('rider') ? req.auth!.riderId : undefined))); }
-    catch (error: any) { return rep.code(400).send({ error: error.message }); }
+    catch (error: any) { return rep.code(/rider can only start their assigned route/i.test(String(error?.message || '')) ? 403 : 400).send({ error: error.message }); }
   });
   app.post('/api/laundry/routes/:runId/stops/:stopId/complete', { preHandler: [guard, allowAny('routes.manage', 'routes.manage.assigned')] }, async (req: any, rep: any) => {
     if (req.auth!.roles.includes('rider') && !req.auth!.riderId) return rep.code(403).send({ error: 'rider account is not linked to an active rider record' });
     try { return inStore(req, () => idempotent(req, `laundry.route-stop:${req.params.stopId}`, () => completeRouteStop(req.auth!.tenant, req.auth!.actor, req.params.runId, req.params.stopId, req.body as any, req.auth!.roles.includes('rider') ? req.auth!.riderId : undefined))); }
-    catch (error: any) { return rep.code(400).send({ error: error.message }); }
+    catch (error: any) { return rep.code(/rider can only complete stops on their assigned route/i.test(String(error?.message || '')) ? 403 : 400).send({ error: error.message }); }
   });
   app.get('/api/ops/hardware-capabilities', { preHandler: [guard, allow('hardware.read')] }, async () => hardwareCapabilities());
   app.get('/api/ops/hardware-status', { preHandler: [guard, allow('hardware.read')] }, async (req: any) => inStore(req, () => hardwareStatus(req.auth!.tenant)));
@@ -1637,6 +1715,9 @@ export function registerApi(app: FastifyInstance) {
     return {
       businessName: settings.businessName,
       address: settings.address,
+      description: settings.description,
+      googleReviewUrl: settings.googleReviewUrl,
+      termsAndConditions: settings.termsAndConditions,
       phone: settings.phone,
       email: settings.email,
       upiId: settings.upiId,
@@ -1688,25 +1769,35 @@ export function registerApi(app: FastifyInstance) {
     const query = req.query as any;
     return inStore(req, () => laundryReports(req.auth!.tenant, query?.from, query?.to));
   });
+  app.get('/api/laundry/reports/:kind/chart', { preHandler: [guard, allow('reports.read')] }, async (req: any, rep: any) => {
+    if (isLaundryReportLocked(req.params.kind)) return rep.code(423).send({ code: 'REPORT_NOT_ACTIVATED', error: 'Warehouse User Work Report is locked. Contact Us for activation.' });
+    try { return inStore(req, () => laundryReportChart(req.auth!.tenant, req.params.kind, req.query?.from, req.query?.to, req.query?.paymentMethod)); }
+    catch (error: any) { return rep.code(400).send({ error: error.message || 'report chart could not be loaded' }); }
+  });
   app.get('/api/laundry/reports/:kind/export', { preHandler: [guard, allow('reports.read')] }, async (req: any, rep: any) => {
+    if (isLaundryReportLocked(req.params.kind)) return rep.code(423).send({ code: 'REPORT_NOT_ACTIVATED', error: 'Warehouse User Work Report is locked. Contact Us for activation.' });
     try {
       const cap = 5000;
-      const result = inStore(req, () => laundryReportDetail(req.auth!.tenant, req.params.kind, req.query?.from, req.query?.to, req.query?.search, 1, cap, cap));
+      const collectionView = req.query?.view === 'customer' ? 'customer' : 'invoice';
+      const orderView = req.query?.view === 'invoice' ? 'invoice' : 'service';
+      const balanceView = req.query?.view === 'customer' ? 'customer' : 'invoice';
+      const result = inStore(req, () => laundryReportDetail(req.auth!.tenant, req.params.kind, req.query?.from, req.query?.to, req.query?.search, req.query?.paymentMethod, 1, cap, cap, false, collectionView, orderView, balanceView));
       return { ...result, exportAll: true, exportCap: cap, exportTruncated: result.totalRows > cap };
     }
     catch (error: any) { return rep.code(400).send({ error: error.message }); }
   });
   app.post('/api/laundry/report-exports', { preHandler: [guard, allow('reports.read')] }, async (req: any, rep: any) => {
+    if (isLaundryReportLocked(String(req.body?.kind || req.body?.reportKind || ''))) return rep.code(423).send({ code: 'REPORT_NOT_ACTIVATED', error: 'Warehouse User Work Report is locked. Contact Us for activation.' });
     try { return rep.code(202).send(inStore(req, () => idempotent(req, 'laundry.report-export-queue', () => createLaundryReportExportJob(req.auth!.tenant, req.auth!.actor, { ...(req.body || {}), kind: req.body?.kind || req.body?.reportKind })))); }
     catch (error: any) { return rep.code(400).send({ error: error.message || 'report export could not be queued' }); }
   });
   app.get('/api/laundry/report-exports/:id', { preHandler: [guard, allow('reports.read')] }, async (req: any, rep: any) => {
-    try { return inStore(req, () => getLaundryReportExportJob(req.auth!.tenant, req.params.id)); }
+    try { return inStore(req, () => { const job = getLaundryReportExportJob(req.auth!.tenant, req.params.id); if (isLaundryReportLocked(job.kind)) { rep.code(423); return { code: 'REPORT_NOT_ACTIVATED', error: 'Warehouse User Work Report is locked. Contact Us for activation.' }; } return job; }); }
     catch (error: any) { return rep.code(404).send({ error: error.message }); }
   });
   app.get('/api/laundry/report-exports/:id/download', { preHandler: [guard, allow('reports.read')] }, async (req: any, rep: any) => {
     try { const result = inStore(req, () => readLaundryReportExport(req.auth!.tenant, req.params.id)); rep.header('Content-Type', 'text/csv; charset=utf-8'); rep.header('Content-Disposition', `attachment; filename="${result.job.fileName}"`); return rep.send(result.csv); }
-    catch (error: any) { return rep.code(409).send({ error: error.message }); }
+    catch (error: any) { return rep.code(String(error?.message || '').includes('locked') ? 423 : 409).send({ code: String(error?.message || '').includes('locked') ? 'REPORT_NOT_ACTIVATED' : undefined, error: error.message }); }
   });
   app.get('/api/laundry/report-views', { preHandler: [guard, allow('reports.read')] }, async (req: any) => inStore(req, () => listSavedReportViews(req.auth!.tenant, req.auth!.actor)));
   app.post('/api/laundry/report-views', { preHandler: [guard, allow('reports.read')] }, async (req: any, rep: any) => {
@@ -1728,18 +1819,43 @@ export function registerApi(app: FastifyInstance) {
     catch (error: any) { return rep.code(400).send({ error: error.message }); }
   });
   app.get('/api/laundry/reports/:kind', { preHandler: [guard, allow('reports.read')] }, async (req: any, rep: any) => {
+    if (isLaundryReportLocked(req.params.kind)) return rep.code(423).send({ code: 'REPORT_NOT_ACTIVATED', error: 'Warehouse User Work Report is locked. Contact Us for activation.' });
     try {
       const page = Math.max(1, Math.floor(Number(req.query?.page) || 1));
       const pageSize = Math.max(1, Math.min(500, Math.floor(Number(req.query?.pageSize) || 100)));
-      return inStore(req, () => laundryReportDetail(req.auth!.tenant, req.params.kind, req.query?.from, req.query?.to, req.query?.search, page, pageSize));
+      const collectionView = req.query?.view === 'customer' ? 'customer' : 'invoice';
+      const orderView = req.query?.view === 'invoice' ? 'invoice' : 'service';
+      const balanceView = req.query?.view === 'customer' ? 'customer' : 'invoice';
+      return inStore(req, () => laundryReportDetail(req.auth!.tenant, req.params.kind, req.query?.from, req.query?.to, req.query?.search, req.query?.paymentMethod, page, pageSize, undefined, false, collectionView, orderView, balanceView));
     }
     catch (error: any) { return rep.code(400).send({ error: error.message }); }
   });
-  app.get('/api/laundry/statistics', { preHandler: [guard, allow('orders.read')] }, async (req: any) => inStore(req, () => {
-    const requestedPeriod = String(req.query?.period || 'today');
-    const period = requestedPeriod === 'week' ? 'week' : requestedPeriod === 'lifetime' ? 'lifetime' : 'today';
-    return laundryStatistics(req.auth!.tenant, period);
-  }));
+  app.get('/api/laundry/statistics', { preHandler: [guard, allow('orders.read')] }, async (req: any, rep: any) => {
+    try {
+      const keys = ['ordersReview', 'collection', 'customerFrequency', 'newCustomer'] as const;
+      const hasSectionFilters = keys.some((key) => req.query?.[`${key}Period`] !== undefined || req.query?.[`${key}From`] !== undefined || req.query?.[`${key}To`] !== undefined);
+      if (!hasSectionFilters) {
+        const requestedPeriod = String(req.query?.period || 'today');
+        const period = requestedPeriod === 'week' ? 'week' : requestedPeriod === 'lifetime' ? 'lifetime' : 'today';
+        return inStore(req, () => laundryStatistics(req.auth!.tenant, period));
+      }
+      const filters: Record<string, { period?: string; from?: string; to?: string }> = {};
+      for (const key of keys) {
+        const period = req.query?.[`${key}Period`];
+        const from = req.query?.[`${key}From`];
+        const to = req.query?.[`${key}To`];
+        if (period !== undefined || from !== undefined || to !== undefined) filters[key] = { period: period === undefined ? undefined : String(period), from: from === undefined ? undefined : String(from), to: to === undefined ? undefined : String(to) };
+      }
+      return inStore(req, () => laundryStatistics(req.auth!.tenant, filters as Parameters<typeof laundryStatistics>[1]));
+    } catch (error: any) { return rep.code(400).send({ error: error.message }); }
+  });
+  app.post('/api/laundry/import/preview', { preHandler: [guard, allow('catalogue.manage')] }, async (req: any, rep: any) => {
+    try {
+      const importType = req.body?.type;
+      if (importType !== 'customers' && importType !== 'prices') throw new Error('import type must be customers or prices');
+      return inStore(req, () => previewLaundryImport(req.auth!.tenant, importType, req.body?.rows));
+    } catch (error: any) { return rep.code(400).send({ error: error.message }); }
+  });
   app.post('/api/laundry/import/customers', { preHandler: [guard, allow('catalogue.manage')] }, async (req: any, rep: any) => {
     try { return rep.code(201).send(inStore(req, () => idempotent(req, 'laundry.customer-import', () => importLaundryCustomers(req.auth!.tenant, req.auth!.actor, req.body?.rows)))); }
     catch (error: any) { return rep.code(400).send({ error: error.message }); }
@@ -1835,6 +1951,15 @@ export function registerApi(app: FastifyInstance) {
     if (!profile) throw new Error('TAX_PROFILE_INCOMPLETE');
     return { gstin: profile.gstin || '', name: profile.legalName, addr: profile.address, state: profile.stateCode };
   }
+  function canonicalInvoiceForOrder(tenant: string, sourceOrderId: string) {
+    const order = store.getRow(tenant, sourceOrderId);
+    const currentId = String(order?.data.canonical_invoice_snapshot_id || '');
+    const current = currentId ? store.getRow(tenant, currentId) : undefined;
+    if (current?.entity === 'canonical_invoice_snapshot') return current;
+    return store.rowsOf(tenant, 'canonical_invoice_snapshot')
+      .filter((candidate) => candidate.data.sourceOrderId === sourceOrderId)
+      .sort((left, right) => String(right.data.issuedAt || right.created_at).localeCompare(String(left.data.issuedAt || left.created_at)))[0];
+  }
   app.post('/api/gst/canonical-invoices', { schema: { body: { type: 'object', required: ['sourceOrderId', 'supplier', 'customer', 'tax'], properties: { sourceOrderId: { type: 'string', minLength: 1, maxLength: 160 }, issuedAt: { type: 'string', maxLength: 40 }, supplier: { type: 'object', additionalProperties: true }, customer: { type: 'object', additionalProperties: true }, tax: { type: 'object', additionalProperties: true }, paidPaise: { type: 'integer', minimum: 0 } }, additionalProperties: false } }, preHandler: [guard, allow('orders.edit')] }, async (req: any, rep: any) => {
     try { return rep.code(201).send(inStore(req, () => idempotent(req, `gst.canonical-invoice:${req.body.sourceOrderId}`, () => createCanonicalInvoiceSnapshot(req.auth!.tenant, req.auth!.actor, req.body)))); }
     catch (error: any) { return rep.code(400).send({ code: error.message, error: error.message }); }
@@ -1844,11 +1969,11 @@ export function registerApi(app: FastifyInstance) {
     catch (error: any) { return rep.code(400).send({ code: error.message, error: error.message }); }
   });
   app.get('/api/gst/canonical-invoices/:sourceOrderId', { schema: { params: { type: 'object', required: ['sourceOrderId'], properties: { sourceOrderId: { type: 'string', minLength: 1, maxLength: 160 } }, additionalProperties: false } }, preHandler: [guard, allow('orders.read')] }, async (req: any, rep: any) => {
-    const row = inStore(req, () => store.rowsOf(req.auth!.tenant, 'canonical_invoice_snapshot').find((candidate) => candidate.data.sourceOrderId === req.params.sourceOrderId));
+    const row = inStore(req, () => canonicalInvoiceForOrder(req.auth!.tenant, req.params.sourceOrderId));
     return row || rep.code(404).send({ error: 'canonical invoice not found' });
   });
   app.get('/api/gst/canonical-invoices/:sourceOrderId/print', { schema: { params: { type: 'object', required: ['sourceOrderId'], properties: { sourceOrderId: { type: 'string', minLength: 1, maxLength: 160 } }, additionalProperties: false } }, preHandler: [guard, allow('orders.read')] }, async (req: any, rep: any) => {
-    const row = inStore(req, () => store.rowsOf(req.auth!.tenant, 'canonical_invoice_snapshot').find((candidate) => candidate.data.sourceOrderId === req.params.sourceOrderId));
+    const row = inStore(req, () => canonicalInvoiceForOrder(req.auth!.tenant, req.params.sourceOrderId));
     if (!row) return rep.code(404).send({ error: 'canonical invoice not found' });
     rep.header('Content-Type', 'text/html; charset=utf-8');
     return renderCanonicalTaxInvoice(row.data as any);
@@ -2477,10 +2602,13 @@ export function registerApi(app: FastifyInstance) {
     if (!def) return { ok: false, error: 'unknown entity' };
     return { entity, action, role: role || 'admin', allowed: roleCan(role || 'admin', action, def) };
   });
-  app.post('/api/payments/link', { preHandler: guard }, async (req: any, rep: any) => {
+  app.post('/api/payments/link', { preHandler: [guard, allow('payments.collect')] }, async (req: any, rep: any) => {
     const b = req.body as any;
-    if (!b?.amount) return rep.code(400).send({ error: 'amount required' });
-    try { return paymentLink(b); } catch (e: any) { return rep.code(400).send({ error: e.message }); }
+    const amount = Number(b?.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return rep.code(400).send({ error: 'amount must be greater than zero' });
+    const roundedAmount = Math.round(amount * 100) / 100;
+    if (Math.abs(amount - roundedAmount) > 0.000001) return rep.code(400).send({ error: 'amount must use two decimal places or fewer' });
+    try { return paymentLink({ ...b, amount: roundedAmount }); } catch (e: any) { return rep.code(400).send({ error: e.message }); }
   });
   app.post('/api/rpa/run', { preHandler: guard }, async (req: any, rep: any) => {
     const { bot, input } = req.body as any;

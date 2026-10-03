@@ -1,8 +1,8 @@
 import { lazy, Suspense, type ReactNode } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { LaundryShell } from "@/components/laundry/LaundryShell";
 import { AuthGate } from "@/components/auth/AuthGate";
-import { canUseUi, type UiPermission } from "@/components/laundry/LaundryShell";
+import { canUseUi, type UiPermission } from "@/lib/permissions";
 import { useQuery } from "@tanstack/react-query";
 import { apiGet } from "@/lib/api";
 import { isWebOnly, sessionFromStoredCloud } from "@/lib/cloudAuth";
@@ -17,6 +17,15 @@ const LaundryCatalogue = lazy(() => import("@/pages/laundry/LaundryCatalogue"));
 const LaundryExpenses = lazy(() => import("@/pages/laundry/LaundryExpenses"));
 const LaundryReports = lazy(() => import("@/pages/laundry/LaundryReports"));
 const LaundryImport = lazy(() => import("@/pages/laundry/LaundryImport"));
+const LaundryMessageTemplates = lazy(() => import("@/pages/laundry/LaundryMessageTemplates"));
+const LaundryOrderNoSeries = lazy(() => import("@/pages/laundry/LaundryOrderNoSeries"));
+const LaundryStoreDiscounts = lazy(() => import("@/pages/laundry/LaundryStoreDiscounts"));
+const LaundryStoreCharges = lazy(() => import("@/pages/laundry/LaundryStoreCharges"));
+const LaundryServiceUnits = lazy(() => import("@/pages/laundry/LaundryServiceUnits"));
+const LaundryCategories = lazy(() => import("@/pages/laundry/LaundryCategories"));
+const LaundryServices = lazy(() => import("@/pages/laundry/LaundryServices"));
+const LaundryStoreUsers = lazy(() => import("@/pages/laundry/LaundryStoreUsers"));
+const LaundryStorePackages = lazy(() => import("@/pages/laundry/LaundryStorePackages"));
 const LaundryCatalogueImport = lazy(() => import("@/pages/laundry/LaundryCatalogueImport"));
 const LaundryDispatch = lazy(() => import("@/pages/laundry/LaundryDispatch"));
 const LaundrySettings = lazy(() => import("@/pages/laundry/LaundrySettings"));
@@ -66,7 +75,7 @@ export function App() {
         <Route path="customers" element={<PermissionGate permission="customers.read"><LaundryCustomers /></PermissionGate>} />
         <Route path="customers/:id" element={<PermissionGate permission="customers.read"><LaundryCustomers /></PermissionGate>} />
         <Route path="packages" element={<PermissionGate permission="packages.read"><LaundryPackages /></PermissionGate>} />
-        <Route path="new-order" element={<PermissionGate permission="orders.create"><LaundryBooking /></PermissionGate>} />
+        <Route path="new-order" element={<OrderBuilderGate />} />
         <Route path="orders" element={<PermissionGate permission="orders.read"><LaundryOrders /></PermissionGate>} />
         <Route path="orders/:id" element={<PermissionGate permission="orders.read"><LaundryOrders /></PermissionGate>} />
         <Route path="online-orders" element={<PermissionGate permission="orders.read"><LaundryOnlineOrders /></PermissionGate>} />
@@ -87,11 +96,20 @@ export function App() {
         <Route path="settlements" element={<PermissionGate permission="orders.read"><LaundrySettlements /></PermissionGate>} />
         <Route path="dispatch" element={<PermissionGate permission="orders.read"><LaundryDispatch /></PermissionGate>} />
         <Route path="expenses" element={<PermissionGate permission="expenses.create"><LaundryExpenses /></PermissionGate>} />
-        <Route path="reports" element={<PermissionGate permission="settings.manage"><LaundryReports /></PermissionGate>} />
-        <Route path="reports/:kind" element={<PermissionGate permission="settings.manage"><LaundryReportDetail /></PermissionGate>} />
+        <Route path="reports" element={<PermissionGate permission="reports.read"><LaundryReports /></PermissionGate>} />
+        <Route path="reports/:kind" element={<PermissionGate permission="reports.read"><LaundryReportDetail /></PermissionGate>} />
         <Route path="statistics" element={<PermissionGate permission="orders.read"><LaundryStatistics /></PermissionGate>} />
         <Route path="import-prices" element={<PermissionGate permission="settings.manage"><LaundryImport mode="prices" /></PermissionGate>} />
         <Route path="import-customers" element={<PermissionGate permission="settings.manage"><LaundryImport mode="customers" /></PermissionGate>} />
+        <Route path="message-templates" element={<PermissionGate permission="settings.manage"><LaundryMessageTemplates /></PermissionGate>} />
+        <Route path="order-series" element={<PermissionGate permission="settings.manage"><LaundryOrderNoSeries /></PermissionGate>} />
+        <Route path="settings/discounts" element={<PermissionGate permission="settings.manage"><LaundryStoreDiscounts /></PermissionGate>} />
+        <Route path="settings/charges" element={<PermissionGate permission="settings.manage"><LaundryStoreCharges /></PermissionGate>} />
+        <Route path="settings/service-units" element={<PermissionGate permission="settings.manage"><LaundryServiceUnits /></PermissionGate>} />
+        <Route path="settings/categories" element={<PermissionGate permission="settings.manage"><LaundryCategories /></PermissionGate>} />
+        <Route path="settings/services" element={<PermissionGate permission="settings.manage"><LaundryServices /></PermissionGate>} />
+        <Route path="settings/store-users" element={<PermissionGate permission="settings.manage"><LaundryStoreUsers /></PermissionGate>} />
+        <Route path="settings/store-packages" element={<PermissionGate permission="settings.manage"><LaundryStorePackages /></PermissionGate>} />
         <Route path="import-catalogue" element={<PermissionGate permission="settings.manage"><LaundryCatalogueImport /></PermissionGate>} />
         <Route path="catalogue" element={<PermissionGate permission="catalogue.read"><LaundryCatalogue /></PermissionGate>} />
         <Route path="settings" element={<PermissionGate permission="settings.manage"><LaundrySettings /></PermissionGate>} />
@@ -128,4 +146,10 @@ function PermissionGate({ permission, children }: { permission: UiPermission; ch
   if (session.isLoading) return <div className="grid h-72 place-items-center text-sm text-muted-foreground">Checking your workspace access…</div>
   if (!canUseUi(session.data?.user?.roles, permission)) return <section className="mx-auto mt-16 max-w-lg rounded-2xl border border-amber-200 bg-amber-50 p-7 text-center text-amber-950"><h1 className="font-serif text-2xl">This workspace is not assigned to your role.</h1><p className="mt-2 text-sm leading-6">Ask an owner to update your branch access if you need this part of Epic Laundry.</p></section>
   return <>{children}</>
+}
+
+function OrderBuilderGate() {
+  const location = useLocation()
+  const isAmendment = Boolean(new URLSearchParams(location.search).get('edit'))
+  return <PermissionGate permission={isAmendment ? 'orders.edit' : 'orders.create'}><LaundryBooking /></PermissionGate>
 }

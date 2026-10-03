@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ApiError, apiGet, apiPost, operatorErrorMessage } from '@/lib/api'
 import VisualLoadingState from '@/components/laundry/VisualLoadingState'
-import { canUseUi } from '@/components/laundry/LaundryShell'
+import { canUseUi } from '@/lib/permissions'
 
 type SyncStatus = {
   version: number

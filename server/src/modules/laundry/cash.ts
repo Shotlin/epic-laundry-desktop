@@ -30,18 +30,38 @@ export function cashShiftForTransaction(tenant: string, register?: unknown) {
   if (open.length > 1) throw new Error('register is required when multiple cash shifts are open');
   return open[0];
 }
-function movements(tenant: string, shift: ReturnType<typeof current>) {
-  if (!shift) return { collectionsPaise: 0, expensesPaise: 0, refundsPaise: 0, collectionCount: 0, expenseCount: 0, refundCount: 0 };
-  const since = shift.created_at;
-  const cashPayments = store.rowsOf(tenant, 'payment_entry').filter((row) => row.status === 'Submitted' && row.data.payment_type === 'Receive' && row.data.mode === 'Cash' && (row.data.cash_shift_id ? row.data.cash_shift_id === shift.id : row.created_at >= since));
-  const cashExpenses = store.rowsOf(tenant, 'laundry_expense').filter((row) => row.status === 'Paid' && row.data.payment_mode === 'Cash' && (row.data.cash_shift_id ? row.data.cash_shift_id === shift.id : row.created_at >= since));
-  const cashRefunds = store.rowsOf(tenant, 'payment_entry').filter((row) => row.status === 'Cancelled' && row.data.payment_type === 'Receive' && row.data.mode === 'Cash' && row.data.provider_status === 'Reversed' && (row.data.cash_shift_id ? row.data.cash_shift_id === shift.id : row.updated_at >= since));
+type CashShiftIdentity = { id: string; created_at: string };
+function movementBelongsToShift(shift: CashShiftIdentity, row: { data: Record<string, any>; created_at: string }) {
+  return row.data.cash_shift_id ? row.data.cash_shift_id === shift.id : row.created_at >= shift.created_at;
+}
+
+export function cashShiftMovements(tenant: string, shift: CashShiftIdentity) {
+  const cashPayments = store.rowsOf(tenant, 'payment_entry').filter((row) => row.status === 'Submitted' && row.data.payment_type === 'Receive' && row.data.mode === 'Cash' && movementBelongsToShift(shift, row));
+  const cashPackagePurchases = store.rowsOf(tenant, 'customer_package').filter((row) => {
+    if (row.status !== 'Posted' || !movementBelongsToShift(shift, row)) return false;
+    const document = store.listFinancialDocuments(tenant, { documentType: 'package-payment', sourceId: row.id }).find((item) => item.sourceEntity === row.entity);
+    const initialAmount = store.financialDocumentAmountPaise(tenant, 'package-payment', row.entity, row.id)
+      ?? store.financialEntryAmountPaise(tenant, 'package-payment', row.entity, row.id)
+      ?? paiseAmount(row.data.initial_payment_amount || 0, `package ${row.id} initial payment`);
+    const initialMode = String(row.data.initial_payment_mode || document?.metadata.paymentMode || '');
+    return initialMode === 'Cash' && initialAmount > 0;
+  });
+  const cashPackagePayments = store.rowsOf(tenant, 'customer_package_payment').filter((row) => row.status === 'Posted' && row.data.mode === 'Cash' && movementBelongsToShift(shift, row));
+  const cashExpenses = store.rowsOf(tenant, 'laundry_expense').filter((row) => row.status === 'Paid' && row.data.payment_mode === 'Cash' && movementBelongsToShift(shift, row));
+  const cashRefunds = store.rowsOf(tenant, 'payment_entry').filter((row) => row.status === 'Cancelled' && row.data.payment_type === 'Receive' && row.data.mode === 'Cash' && row.data.provider_status === 'Reversed' && (row.data.cash_shift_id ? row.data.cash_shift_id === shift.id : row.updated_at >= shift.created_at));
+  const packagePurchasePaise = cashPackagePurchases.reduce((sum, row) => sum + canonicalMovementAmount(tenant, 'package-payment', row, row.data.initial_payment_amount || row.data.price_paid || 0, `package ${row.id} payment`), 0);
+  const packagePaymentPaise = cashPackagePayments.reduce((sum, row) => sum + canonicalMovementAmount(tenant, 'package-payment', row, row.data.amount, `package payment ${row.id}`), 0);
   return {
-    collectionsPaise: cashPayments.reduce((sum, row) => sum + canonicalMovementAmount(tenant, 'collection', row, row.data.amount, `payment ${row.id}`), 0),
+    collectionsPaise: cashPayments.reduce((sum, row) => sum + canonicalMovementAmount(tenant, 'collection', row, row.data.amount, `payment ${row.id}`), 0) + packagePurchasePaise + packagePaymentPaise,
     expensesPaise: cashExpenses.reduce((sum, row) => sum + canonicalMovementAmount(tenant, 'expense', row, row.data.amount, `expense ${row.id}`), 0),
     refundsPaise: cashRefunds.reduce((sum, row) => sum + canonicalMovementAmount(tenant, 'refund', row, row.data.amount, `refund ${row.id}`), 0),
-    collectionCount: cashPayments.length, expenseCount: cashExpenses.length, refundCount: cashRefunds.length,
+    collectionCount: cashPayments.length + cashPackagePurchases.length + cashPackagePayments.length, expenseCount: cashExpenses.length, refundCount: cashRefunds.length,
   };
+}
+
+function movements(tenant: string, shift: ReturnType<typeof current>) {
+  if (!shift) return { collectionsPaise: 0, expensesPaise: 0, refundsPaise: 0, collectionCount: 0, expenseCount: 0, refundCount: 0 };
+  return cashShiftMovements(tenant, shift);
 }
 function present(tenant: string, row: ReturnType<typeof current>) {
   if (!row) return null;

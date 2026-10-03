@@ -4,8 +4,9 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { apiGet, operatorErrorMessage } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { canUseUi } from '@/components/laundry/LaundryShell'
+import { canUseUi } from '@/lib/permissions'
 import { useDialogFocusLifecycle } from '@/components/laundry/useDialogFocus'
+import PlatformConnectionState from '@/components/laundry/PlatformConnectionState'
 import VisualEmptyState from '@/components/laundry/VisualEmptyState'
 import VisualLoadingState from '@/components/laundry/VisualLoadingState'
 
@@ -53,8 +54,8 @@ export default function LaundryPlatformOrders() {
   const detail = useQuery({ queryKey: ['platform-order', selected], queryFn: () => apiGet<PlatformOrderDetail>(`/platform/orders/${encodeURIComponent(selected!)}`), enabled: Boolean(selected) && canAccess && Boolean(connection.data?.connected) })
 
   if (session.isLoading || connection.isLoading) return <VisualLoadingState title="Preparing order oversight" detail="Checking the local permission and platform-admin connection." icon={ClipboardList} />
-  if (!canAccess) return <VisualEmptyState kind="orders" title="Not available" detail="Platform order oversight is limited to store owners on this installation." />
-  if (!connection.data?.connected) return <VisualEmptyState kind="orders" title="Connect a platform-admin account first" detail="Marketplace orders stay in the cloud. Open Platform Control to sign in with a separate platform-admin identity." action={<Link to="/laundry/platform-control" className="inline-flex items-center gap-2 rounded-xl bg-[#2c1d61] px-3 py-2 text-xs font-bold text-white"><ShieldCheck className="h-3.5 w-3.5" />Open Platform Control</Link>} />
+  if (!canAccess) return <PlatformConnectionState pageTitle="Platform orders" pageDescription="Read-only oversight of marketplace orders owned by the platform." stateTitle="Not available" stateDetail="Platform order oversight is limited to store owners on this installation." />
+  if (!connection.data?.connected) return <PlatformConnectionState pageTitle="Platform orders" pageDescription="Read-only oversight of marketplace orders owned by the platform." stateTitle="Connect a platform-admin account first" stateDetail="Marketplace orders stay in the cloud. Open Platform Control to sign in with a separate platform-admin identity." action={<Link to="/laundry/platform-control" className="inline-flex items-center gap-2 rounded-xl bg-[#2c1d61] px-3 py-2 text-xs font-bold text-white"><ShieldCheck className="h-3.5 w-3.5" />Open Platform Control</Link>} />
 
   const rows = orders.data?.orders || []
   const pagination = orders.data?.pagination

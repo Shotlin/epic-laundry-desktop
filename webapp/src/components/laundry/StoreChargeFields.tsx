@@ -1,0 +1,29 @@
+import type { ChangeEvent } from 'react'
+
+export type StoreChargeFormValue = {
+  name: string
+  type: '' | 'Flat' | 'Percentage'
+  amount: string
+  expressCharge: boolean
+  description: string
+  active: boolean
+}
+
+type Field = 'name' | 'type' | 'amount' | 'expressCharge' | 'description' | 'active'
+
+export function StoreChargeFields({ form, onChange, autoFocusName = false }: { form: StoreChargeFormValue; onChange: (value: StoreChargeFormValue) => void; autoFocusName?: boolean }) {
+  const isPercentage = form.type === 'Percentage'
+  const update = (field: Field) => (event: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => onChange({
+    ...form,
+    [field]: field === 'expressCharge' || field === 'active' ? (event.target as HTMLInputElement).checked : event.target.value,
+  } as StoreChargeFormValue)
+
+  return <>
+    <label className="block text-sm font-semibold text-[#332849]">Charge Name <span className="text-rose-600">*</span><input autoFocus={autoFocusName} required maxLength={50} aria-label="Charge Name" placeholder="Enter charge name" value={form.name} onChange={update('name')} className="mt-1.5 h-11 w-full rounded-xl border border-[#272043]/15 px-3 text-sm font-normal outline-none focus:ring-2 focus:ring-[#664cf0]" /><span className="mt-1 block text-right text-[11px] font-normal text-[#77718a]">{form.name.length}/50</span></label>
+    <label className="block text-sm font-semibold text-[#332849]">Charge In Type <span className="text-rose-600">*</span><select required aria-label="Charge In Type" value={form.type} onChange={update('type')} className="mt-1.5 h-11 w-full rounded-xl border border-[#272043]/15 bg-white px-3 text-sm font-normal outline-none focus:ring-2 focus:ring-[#664cf0]"><option value="">Select charge type</option><option value="Percentage">Percentage</option><option value="Flat">Amount</option></select></label>
+    <label className="flex min-h-11 items-center gap-3 rounded-xl border border-[#ded9f7] bg-[#faf9fd] px-3 text-sm font-semibold text-[#443d58]"><input checked={form.expressCharge} onChange={update('expressCharge')} type="checkbox" className="h-4 w-4 accent-[#664cf0]" />Express charge <span className="ml-auto text-[10px] font-medium text-[#77718a]">Added when Express Delivery is selected</span></label>
+    <label className="block text-sm font-semibold text-[#332849]">Charge Amount <span className="text-rose-600">*</span><input required type="number" min="0" max={isPercentage ? 100 : undefined} step="any" aria-label="Charge Amount" placeholder={isPercentage ? 'Enter percentage' : 'Enter amount'} value={form.amount} onChange={update('amount')} className="mt-1.5 h-11 w-full rounded-xl border border-[#272043]/15 px-3 text-sm font-normal outline-none focus:ring-2 focus:ring-[#664cf0]" />{isPercentage ? <span className="mt-1 block text-[11px] font-normal text-[#77718a]">Percentage must be from 0 to 100.</span> : null}</label>
+    <label className="block text-sm font-semibold text-[#332849]">Description<textarea maxLength={500} aria-label="Description" placeholder="Optional description" value={form.description} onChange={update('description')} rows={2} className="mt-1.5 w-full resize-y rounded-xl border border-[#272043]/15 px-3 py-2.5 text-sm font-normal outline-none focus:ring-2 focus:ring-[#664cf0]" /><span className="mt-1 block text-right text-[11px] font-normal text-[#77718a]">{form.description.length}/500</span></label>
+    <div className="flex items-center justify-between gap-3 rounded-xl border border-[#ded9f7] bg-[#faf9fd] px-3 py-2.5"><label className="flex items-center gap-3 text-sm font-semibold text-[#443d58]"><input checked={form.active} onChange={update('active')} type="checkbox" className="h-4 w-4 accent-[#664cf0]" />Available to staff</label><span className="rounded-full bg-[#eeeaff] px-2 py-1 text-[10px] font-bold text-[#5740cb]">Epic-only option</span></div>
+  </>
+}

@@ -24,7 +24,7 @@ const visualReviewDir = join(process.cwd(), '..', 'demo-runtime', 'visual-review
 mkdirSync(visualReviewDir, { recursive: true });
 
 async function signIntoDemo(page: Page) {
-  await page.goto('/ui/app/');
+  await page.goto('/ui/app/?local-demo=1');
   const demoAccess = page.getByText('Demo access');
   if (await demoAccess.isVisible()) {
     await page.getByRole('button', { name: 'Sign in' }).click();
@@ -50,13 +50,16 @@ test('representative populated screens are captured for human visual review', as
   for (const width of viewports) {
     await page.setViewportSize({ width, height: 900 });
     for (const [name, route] of routes) {
-      await page.goto(route, { waitUntil: 'domcontentloaded' });
-      await expect(page.locator('aside').first()).toBeVisible();
+      await page.goto(route.replace('/ui/app/', '/ui/app/?local-demo=1'), { waitUntil: 'domcontentloaded' });
+      if (route.endsWith('/dashboard')) await expect(page.locator('aside').first()).toBeVisible();
+      else {
+        await expect(page.getByRole('button', { name: 'Back to dashboard' })).toBeVisible();
+      }
       await expect(page.locator('body')).not.toContainText('Application error');
       await settleForVisualReview(page);
       await page.screenshot({ path: join(visualReviewDir, `${name}-${width}.png`), fullPage: true });
     }
-    await page.goto('/ui/app/#/laundry/orders?view=customers', { waitUntil: 'domcontentloaded' });
+    await page.goto('/ui/app/?local-demo=1#/laundry/orders?view=customers', { waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('heading', { name: 'Store orders & customers' })).toBeVisible();
     const customerAction = page.getByRole('button', { name: 'Open profile' }).first();
     if (await customerAction.count()) {

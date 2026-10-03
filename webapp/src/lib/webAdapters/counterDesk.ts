@@ -74,16 +74,44 @@ for (const action of ['claim', 'renew', 'release', 'resume', 'cancel']) {
 
 // ── Print settings ──────────────────────────────────────────────────────
 const PRINT_KEY = 'epic-web-print-settings-v1'
+const UPI_QR_KEY = 'epic-web-upi-qr-settings-v1'
 export function storedPrintSettings(): Record<string, unknown> {
   try { return JSON.parse(window.localStorage.getItem(PRINT_KEY) || '{}') } catch { return {} }
+}
+const storageBranch = (value: unknown) => String(value || 'store').trim().slice(0, 120) || 'store'
+export function storedUpiQrSettings(branchId: unknown): { upiId: string; qrOnPrint: boolean } | undefined {
+  const key = `${UPI_QR_KEY}:${encodeURIComponent(storageBranch(branchId))}`
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(key) || 'null') as { upiId?: unknown; qrOnPrint?: unknown } | null
+    if (saved && typeof saved === 'object') return { upiId: String(saved.upiId || ''), qrOnPrint: saved.qrOnPrint !== false }
+    // Migrate the previous single-browser value into the branch that first reads it, then remove
+    // the unscoped payment identifier so it cannot appear in a different branch's print settings.
+    const legacy = JSON.parse(window.localStorage.getItem(PRINT_KEY) || '{}') as Record<string, unknown>
+    if (typeof legacy.upiId === 'string' || typeof legacy.qrOnPrint === 'boolean') {
+      const migrated = { upiId: String(legacy.upiId || ''), qrOnPrint: typeof legacy.qrOnPrint === 'boolean' ? legacy.qrOnPrint : true }
+      window.localStorage.setItem(key, JSON.stringify(migrated))
+      const { upiId: _upiId, qrOnPrint: _qrOnPrint, ...printSettings } = legacy
+      window.localStorage.setItem(PRINT_KEY, JSON.stringify(printSettings))
+      return migrated
+    }
+  } catch { /* private/locked storage leaves settings unavailable on this browser */ }
+  return undefined
+}
+export function saveStoredUpiQrSettings(branchId: unknown, value: { upiId: string; qrOnPrint: boolean }) {
+  const key = `${UPI_QR_KEY}:${encodeURIComponent(storageBranch(branchId))}`
+  try { window.localStorage.setItem(key, JSON.stringify({ upiId: value.upiId.trim(), qrOnPrint: value.qrOnPrint === true })) } catch { /* private/locked storage: caller still reports that the web save is unavailable only if readback fails */ }
 }
 route('GET', '/laundry/print-settings', async ({ get }) => {
   const profile = await get('/vendor/profile').catch(() => ({}))
   const address = [profile.address_line1, profile.address_line2, profile.city, profile.state, profile.pincode].filter(Boolean).join(', ')
   return {
-    businessName: profile.name || 'LNDRY Partner', address, phone: profile.phone || '', email: profile.email || '',
-    upiId: '', qrOnPrint: true, logoDataUrl: undefined, taxMode: 'none', gstin: '', currency: 'INR', timezone: 'Asia/Kolkata',
+    businessName: profile.name || 'LNDRY Partner', address,
+    description: profile.description || '', googleReviewUrl: '', termsAndConditions: '',
+    addressLine1: profile.address_line1 || '', addressLine2: profile.address_line2 || '', city: profile.city || '', state: profile.state || '', postalCode: profile.pincode || '', landmark: '',
+    phone: profile.phone || '', email: profile.email || '',
+    upiId: '', qrOnPrint: true, logoDataUrl: undefined, taxMode: 'none', taxSameAsCompany: false, gstin: '', currency: 'INR', timezone: 'Asia/Kolkata', orderNoSeries: [],
     printerProfile: 'system-default', afterBooking: 'ask', printerProfiles: [],
     ...storedPrintSettings(),
+    ...(storedUpiQrSettings(profile.id || profile.branch_code || 'store') || {}),
   }
 })
