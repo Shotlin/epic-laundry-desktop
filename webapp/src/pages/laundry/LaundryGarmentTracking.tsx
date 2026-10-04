@@ -759,6 +759,7 @@ function Detail({
           Print again preserves this tag. Replace retires it and creates a new
           active tag. Both require a reason.
         </p>
+        {note.trim().length < 3 ? <p className="mt-1 text-xs font-semibold text-[#f3d48e]">These buttons are off until you type a reason (at least 3 letters) in the note box. After replacing a tag, physically relabel the garment.</p> : null}
       </article>
       <article className="rounded-[24px] border border-[#263f44]/10 bg-white p-6 shadow-[0_8px_28px_rgba(37,48,43,.04)]">
         <div className="flex items-center gap-2">

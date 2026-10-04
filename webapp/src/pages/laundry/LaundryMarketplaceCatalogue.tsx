@@ -231,7 +231,7 @@ function CatalogueRow({ item, selected, onSelect }: { item: CatalogueItem; selec
     <div className="flex items-start gap-3">
       <span className={cn('mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full', !item.isAvailable ? 'bg-[#c45b50]' : low ? 'bg-[#e2a63e]' : 'bg-[#62a796]')} />
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2"><p className="font-bold text-[#27454c]">{item.name || 'Unnamed service'}</p>{item.categoryName ? <span className="rounded-full bg-[#f2f4f1] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[.1em] text-[#718087]">{item.categoryName}</span> : null}</div>
+        <div className="flex flex-wrap items-center gap-2"><p className="font-bold text-[#27454c]">{item.name || 'Old catalogue entry (no service linked)'}</p>{!item.name ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold text-amber-800">Not linked to a service — check before editing</span> : null}{item.categoryName ? <span className="rounded-full bg-[#f2f4f1] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[.1em] text-[#718087]">{item.categoryName}</span> : null}</div>
         <p className="mt-1 truncate text-xs text-[#718087]">{formatINR(item.price)}{item.salePrice !== undefined ? ` · sale ${formatINR(item.salePrice)}` : ''} · Stock {item.stockQuantity}</p>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-2"><span className={cn('rounded-full px-2 py-1 text-[10px] font-bold', item.isAvailable ? 'bg-[#e7f4ef] text-[#2e6a60]' : 'bg-[#fde9e6] text-[#a44036]')}>{item.isAvailable ? 'Available' : 'Unavailable'}</span></div>
@@ -258,7 +258,7 @@ function ItemDetail({ item, canEdit, onSaveFields, onSaveStock, pending }: { ite
   }, [item.id, item.updatedAt])
 
   return <div className="space-y-4 p-4">
-    <div><p className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[.15em] text-[#8fb2a8]"><Tag className="h-3.5 w-3.5" />{item.categoryName || 'Service'}</p><h2 className="mt-1 font-serif text-xl">{item.name || 'Unnamed service'}</h2>{item.sku ? <p className="mt-0.5 text-[10px] text-[#9fc0b5]">SKU {item.sku}</p> : null}<p className="mt-1 text-[10px] text-[#9fc0b5]">Updated {timeLabel(item.updatedAt)} · Approval {item.approvalStatus || 'unknown'}</p></div>
+    <div><p className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[.15em] text-[#8fb2a8]"><Tag className="h-3.5 w-3.5" />{item.categoryName || 'Service'}</p><h2 className="mt-1 font-serif text-xl">{item.name || 'Old catalogue entry (no service linked)'}</h2>{item.sku ? <p className="mt-0.5 text-[10px] text-[#9fc0b5]">SKU {item.sku}</p> : null}<p className="mt-1 text-[10px] text-[#9fc0b5]">Updated {timeLabel(item.updatedAt)} · Approval {item.approvalStatus || 'unknown'}</p></div>
 
     <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[.06] p-3.5">
       <p className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[.13em] text-[#8fb2a8]"><IndianRupee className="h-3.5 w-3.5" />Pricing & availability</p>
