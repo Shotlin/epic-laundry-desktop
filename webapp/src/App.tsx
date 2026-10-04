@@ -115,7 +115,7 @@ export function App() {
         <Route path="catalogue" element={<PermissionGate permission="catalogue.read"><LaundryCatalogue /></PermissionGate>} />
         <Route path="settings" element={<PermissionGate permission="settings.manage"><LaundrySettings /></PermissionGate>} />
       </Route>
-      <Route path="*" element={<Navigate to="/laundry/dashboard" replace />} />
+      <Route path="*" element={<PageNotFound />} />
     </Routes>
     </Suspense>
     </AuthGate>
@@ -153,4 +153,8 @@ function OrderBuilderGate() {
   const location = useLocation()
   const isAmendment = Boolean(new URLSearchParams(location.search).get('edit'))
   return <PermissionGate permission={isAmendment ? 'orders.edit' : 'orders.create'}><LaundryBooking /></PermissionGate>
+}
+
+function PageNotFound() {
+  return <div className="grid min-h-[60vh] place-items-center p-6 text-center"><div><h1 className="text-xl font-semibold">We couldn't find that page</h1><p className="mt-2 text-sm text-slate-500">The link may be old or the page may have moved.</p><div className="mt-4 flex justify-center gap-2"><button type="button" onClick={() => window.history.back()} className="rounded-lg border px-3 py-2 text-sm font-semibold">Go back</button><a href="#/laundry/dashboard" className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white">Go to Dashboard</a></div></div></div>
 }

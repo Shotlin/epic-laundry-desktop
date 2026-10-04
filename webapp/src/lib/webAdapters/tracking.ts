@@ -24,7 +24,7 @@ const unitShape = (unit: RealUnit) => ({
   unit: 'Piece', sequence: unit.sequence, state: title(unit.state), location: unit.location, condition: unit.condition,
   expectedDeliveryDate: unit.expectedDeliveryDate || undefined,
   isOverdue: Boolean(unit.expectedDeliveryDate && unit.expectedDeliveryDate < today() && !['DELIVERED', 'CANCELLED'].includes(unit.state)),
-  eventCount: unit.eventCount || 0, reprintCount: unit.reprintCount || 0,
+  eventCount: Math.max(unit.eventCount || 0, (unit.events || []).length), reprintCount: unit.reprintCount || 0,
 })
 
 const eventShape = (event: any) => ({

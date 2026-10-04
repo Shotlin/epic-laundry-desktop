@@ -31,7 +31,7 @@ export function CommandPalette({ destinations = ALL_DESTINATIONS, recordSearchPa
     const term = q.trim().toLowerCase();
     const list = term
       ? destinations.filter(
-          (d) => d.label.toLowerCase().includes(term) || d.ws.toLowerCase().includes(term)
+          (d) => d.label.toLowerCase().includes(term) || d.ws.toLowerCase().includes(term) || aliasesFor(d.label).some((word) => word.includes(term) || term.includes(word))
         )
       : destinations;
     return list.slice(0, 8);
@@ -111,4 +111,16 @@ export function CommandPalette({ destinations = ALL_DESTINATIONS, recordSearchPa
       </div>
     </div>
   );
+}
+
+// Everyday words staff type, mapped to the screen's formal name.
+const ALIASES: Array<[RegExp, string[]]> = [
+  [/statutory|catalogue|tax/i, ['gst', 'tax', 'sac', 'hsn']],
+  [/route|dispatch|settlement|captain/i, ['rider', 'driver', 'delivery rider', 'captain']],
+  [/cash/i, ['cash register', 'register', 'drawer', 'till']],
+  [/order/i, ['order', 'booking', 'bill']],
+  [/finance/i, ['money', 'payment', 'collection']],
+]
+function aliasesFor(label: string) {
+  return ALIASES.filter(([pattern]) => pattern.test(label)).flatMap(([, words]) => words)
 }

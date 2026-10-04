@@ -56,7 +56,7 @@ export default function LaundryStorePackages() {
     </div>
     {notice ? <p role="status" className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">{notice}</p> : null}
     <div className="mt-5 rounded-xl border border-[#d7cffb] bg-[#f8f6ff] px-4 py-3 text-sm leading-5 text-[#514778]">
-      <p><strong>Package setup only.</strong> Service-wise quantity and amount limits are saved here as configuration. They are not connected to customer package purchase or redemption while their MyUniClean rules remain unverified.</p>
+      <p><strong>Legacy package setup — not used at this counter.</strong> Customer packages are sold and redeemed under Care packages. Service-wise quantity and amount limits are saved here as configuration. They are not connected to customer package purchase or redemption while their MyUniClean rules remain unverified.</p>
     </div>
     <section aria-label="Store package list" className="mt-5 overflow-hidden rounded-2xl border border-[#272043]/10 bg-white shadow-[0_8px_28px_rgba(32,23,60,.04)]">
       <div className="flex items-center gap-3 border-b border-[#272043]/8 px-5 py-4"><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#eeeaff] text-[#664cf0]"><Package className="h-4 w-4" /></span><div><h2 className="text-sm font-extrabold text-[#241a45]">Package list</h2><p className="text-xs text-[#77718a]">{packages.data?.length ?? 0} configured for this branch</p></div></div>

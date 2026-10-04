@@ -562,13 +562,13 @@ function DocumentWorkspace({
           </button>
         </div>
       </header>
-      <nav className="mt-6 flex gap-1 overflow-x-auto border-b border-[#263f44]/10">
+      <nav aria-label="Document type" className="mt-6 flex min-h-[44px] shrink-0 gap-1 overflow-x-auto border-b border-[#263f44]/10">
         {tabs.map(([value, label]) => (
           <button
             key={value}
             type="button"
             onClick={() => setTab(value)}
-            className={`whitespace-nowrap border-b-2 px-3 py-3 text-xs font-bold ${tab === value ? "border-[#3a7d78] text-[#2e6a60]" : "border-transparent text-[#718087] hover:text-[#17353c]"}`}
+            className={`shrink-0 whitespace-nowrap border-b-2 px-3 py-3 text-xs font-bold ${tab === value ? "border-[#3a7d78] text-[#2e6a60]" : "border-transparent text-[#718087] hover:text-[#17353c]"}`}
           >
             {value === "history" ? (
               <History className="mr-1 inline h-3.5 w-3.5" />

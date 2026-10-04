@@ -44,7 +44,7 @@ async function dashboard(get: Get): Promise<LaundryDashboard> {
   return {
     asOf,
     kpis: {
-      collection: counterToday,
+      collection: pos?.counterSalesToday?.collectedPaise != null ? rupees(pos.counterSalesToday.collectedPaise) : counterToday,
       orderRequests: awaiting,
       pendingOrders: counterQueue('pending'),
       booking: counterQueue('booking'),

@@ -51,7 +51,7 @@ export default function LaundryDashboard() {
       </section>
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Kpi to={`/laundry/reports/collection?period=today&from=${encodeURIComponent(data.asOf)}&to=${encodeURIComponent(data.asOf)}`} icon={Banknote} label="Collection amount" value={formatINR(data.kpis.collection)} note="Collected today" accent="#664cf0" />
+        <Kpi to={`/laundry/reports/collection?period=today&from=${encodeURIComponent(data.asOf)}&to=${encodeURIComponent(data.asOf)}`} icon={Banknote} label="Received today" value={formatINR(data.kpis.collection)} note="Collected today" accent="#664cf0" />
         <Kpi to="/laundry/online-orders?filter=AwaitingAcceptance" icon={ClipboardList} label="Order requests" value={String(data.kpis.orderRequests)} note="Waiting for a response" accent="#8d79ff" />
         <Kpi to="/laundry/orders?queue=pending" icon={PackageCheck} label="Pending orders" value={String(data.kpis.pendingOrders)} note="Across the store" accent="#187b5c" />
         <Kpi to="/laundry/orders?queue=delivery-due" icon={CalendarClock} label="Upcoming delivery" value={String(data.kpis.upcomingDeliveries)} note="Due today or earlier" accent="#d88a22" />

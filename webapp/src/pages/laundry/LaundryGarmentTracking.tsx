@@ -275,7 +275,7 @@ export default function LaundryGarmentTracking() {
       setTagCode(tag);
       setSearch(tag);
       const kind = searchParams.get("kind");
-      if (kind === "container") setScanKind("container");
+      setScanKind(kind === "container" || (!kind && /^ELB-/i.test(tag)) ? "container" : "garment");
       if (searchParams.get("scan") === "1") window.setTimeout(() => { if (kind === "container") containerScan.mutate(tag); else scan.mutate(tag); }, 0);
     }
   }, [searchParams]);
@@ -341,6 +341,7 @@ export default function LaundryGarmentTracking() {
             type="button"
             onClick={() => {
               setScanKind("garment");
+              setTagCode("");
               setNextState("");
               setSelectedContainer(null);
             }}
@@ -353,6 +354,7 @@ export default function LaundryGarmentTracking() {
             type="button"
             onClick={() => {
               setScanKind("container");
+              setTagCode("");
               setNextState("");
               setSelected(null);
             }}
@@ -730,10 +732,11 @@ function Detail({
         </div>
         <div className="mt-6 grid grid-cols-2 gap-4 text-sm">
           <Metric label="Order" value={unit.orderNumber} />
-          <Metric label="Location" value={unit.location} />
+          <Metric label="Last scanned location" value={unit.location} />
           <Metric label="Condition" value={unit.condition} />
           <Metric label="Events" value={String(unit.events.length)} />
         </div>
+        {isStageAheadOfScan(unit.state, unit.location) ? <p role="alert" className="mt-4 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">Stage and location disagree: this garment is marked {unit.state} but its last scanned location is {unit.location}. The stage was advanced with the order (operator override), not by scanning. Ask a supervisor to confirm where it physically is before handing it over.</p> : null}
         <div className="mt-6 flex flex-wrap gap-2">
           <button
             disabled={pending || note.trim().length < 3}
@@ -929,4 +932,9 @@ function MetricCard({ label, value }: { label: string; value: string }) {
       <p className="mt-1 text-2xl font-bold text-[#215861]">{value}</p>
     </div>
   );
+}
+
+const AHEAD_OF_INTAKE = ['sorted', 'processing', 'qc', 'quality check', 'rewash', 'assembly', 'racked', 'dispatched', 'delivered']
+function isStageAheadOfScan(state: string, location: string) {
+  return /intake/i.test(location || '') && AHEAD_OF_INTAKE.includes(String(state || '').toLowerCase())
 }

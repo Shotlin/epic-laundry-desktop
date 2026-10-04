@@ -38,12 +38,19 @@ function read(): Stored {
 /** Channel + date range, shared by Finance & compliance and Statutory controls so the choice follows the operator between them. */
 export function useFinanceFilters() {
   const [state, setState] = useState<Stored>(read)
+  const [rangeError, setRangeError] = useState('')
   useEffect(() => { try { window.localStorage.setItem(STORE_KEY, JSON.stringify(state)) } catch { /* not remembered */ } }, [state])
   return {
     ...state,
     setChannel: (channel: FinanceChannel) => setState((current) => ({ ...current, channel })),
-    setPreset: (preset: FinancePreset) => setState((current) => (preset === 'custom' ? { ...current, preset } : { ...current, preset, ...rangeFor(preset) })),
-    setRange: (range: { from?: string; to?: string }) => setState((current) => ({ ...current, preset: 'custom', from: range.from || current.from, to: range.to || current.to })),
+    rangeError,
+    setPreset: (preset: FinancePreset) => { setRangeError(''); setState((current) => (preset === 'custom' ? { ...current, preset } : { ...current, preset, ...rangeFor(preset) })) },
+    setRange: (range: { from?: string; to?: string }) => {
+      const next = { from: range.from || state.from, to: range.to || state.to }
+      if (next.from > next.to) { setRangeError('End date must be on or after the start date. Showing the last valid period.'); return }
+      setRangeError('')
+      setState((current) => ({ ...current, preset: 'custom', ...next }))
+    },
   }
 }
 
@@ -79,5 +86,6 @@ export function FinanceFilterBar({ filters, marketplace, tone = 'dark' }: { filt
         <input aria-label="Period end" type="date" value={filters.to} min={filters.from} onChange={(event) => event.target.value && filters.setRange({ to: event.target.value })} className="h-8 rounded-lg border border-white/20 bg-white/10 px-2 text-xs text-white [color-scheme:dark]" />
       </span> : null}
     </div>
+    {filters.rangeError ? <p role="alert" className="text-xs font-bold text-[#ffd1d1]">{filters.rangeError}</p> : null}
   </div>
 }

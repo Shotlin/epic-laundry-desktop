@@ -3298,15 +3298,15 @@ function GarmentBackfillPanel() {
         <div className="mt-4 grid gap-2 sm:grid-cols-3">
           <Stat
             label="Missing units"
-            value={String(preview.data.candidateCount)}
+            value={preview.data.candidateCount == null ? 'Not available' : String(preview.data.candidateCount)}
           />
           <Stat
             label="Measured lines skipped"
-            value={String(preview.data.skippedNonPhysical)}
+            value={preview.data.skippedNonPhysical == null ? 'Not available' : String(preview.data.skippedNonPhysical)}
           />
           <Stat
             label="Validation issues"
-            value={String(preview.data.issueCount)}
+            value={preview.data.issueCount == null ? 'Not available' : String(preview.data.issueCount)}
           />
         </div>
       ) : null}

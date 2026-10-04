@@ -79,8 +79,18 @@ const resolveRider = async (get: (p: string) => Promise<any>, value: string) => 
 route('GET', '/laundry/rider-settlements', async ({ get }) => { const names = await nameMap(get); return (listOf(await get('/vendor/rider-settlements')) as any[]).map((s) => settlementShape(s, names)) })
 route('POST', '/laundry/rider-settlements', async ({ get, post, body }) => {
   const names = await nameMap(get)
+  // Staff type human order numbers; the backend wants ids, so resolve them (and say so if one is unknown).
+  const typed: string[] = body.orderIds || []
+  const known = typed.some((id) => !/^[0-9a-f-]{36}$/i.test(id)) ? (listOf(await get('/vendor/counter/orders?limit=300')) as any[]) : []
+  const orderIds = typed.map((entry) => {
+    if (/^[0-9a-f-]{36}$/i.test(entry)) return entry
+    const match = known.find((order) => String(order.orderNumber || order.order_number || '').toUpperCase() === entry.toUpperCase())
+    if (!match) throw new Error(`Order ${entry} was not found. Check the order number.`)
+    return match.id
+  })
   const created = await post('/vendor/rider-settlements', {
-    riderEmployeeId: await resolveRider(get, body.rider), amountPaise: toPaise(body.amount), method: String(body.method || 'Cash').toUpperCase(), orderIds: (body.orderIds || []).filter((id: string) => /^[0-9a-f-]{36}$/i.test(id)),
+    riderEmployeeId: await resolveRider(get, body.rider), amountPaise: toPaise(body.amount), method: String(body.method || 'Cash').toUpperCase(), orderIds,
+    ...(body.reference ? { reference: String(body.reference).slice(0, 120) } : {}),
   })
   return settlementShape(created, names)
 })

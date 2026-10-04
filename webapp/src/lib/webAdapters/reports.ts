@@ -139,15 +139,15 @@ function table(kind: string, data: Data, collectionView: 'invoice' | 'customer' 
     case 'order':
       if (orderView === 'invoice') return { columns: ['orderDate', 'customerName', 'orderNumber', 'invoiceNumber', 'totalGarments', 'garmentSummary'], rows: orders.map((o) => {
         const garments = new Map<string, number>()
-        for (const item of o.items) garments.set(item.garmentName, (garments.get(item.garmentName) || 0) + item.qty)
-        return { orderDate: o.orderDate, customerName: o.customer.name, orderNumber: o.orderNumber, invoiceNumber: o.invoiceNumber, totalGarments: o.items.reduce((sum, item) => sum + item.qty, 0), garmentSummary: [...garments].map(([name, quantity]) => `${name} (${quantity})`).join(' ') }
+        for (const item of o.items) garments.set(item.garmentName, round((garments.get(item.garmentName) || 0) + item.qty))
+        return { orderDate: o.orderDate, customerName: o.customer.name, orderNumber: o.orderNumber, invoiceNumber: o.invoiceNumber, totalGarments: round(o.items.reduce((sum, item) => sum + item.qty, 0)), garmentSummary: [...garments].map(([name, quantity]) => `${name} (${quantity})`).join(' ') }
       }) }
       else {
         const services = new Map<string, { totalGarments: number; garments: Map<string, number> }>()
         for (const order of orders) for (const item of order.items) {
           const service = services.get(item.serviceName) || { totalGarments: 0, garments: new Map<string, number>() }
-          service.totalGarments += item.qty
-          service.garments.set(item.garmentName, (service.garments.get(item.garmentName) || 0) + item.qty)
+          service.totalGarments = round(service.totalGarments + item.qty)
+          service.garments.set(item.garmentName, round((service.garments.get(item.garmentName) || 0) + item.qty))
           services.set(item.serviceName, service)
         }
         return { columns: ['serviceName', 'totalGarments', 'garmentSummary'], rows: [...services].map(([serviceName, value]) => ({ serviceName, totalGarments: value.totalGarments, garmentSummary: [...value.garments].map(([name, quantity]) => `${name} (${quantity})`).join(' ') })) }
@@ -285,7 +285,7 @@ async function detail(get: (p: string) => Promise<any>, kind: string, query: URL
   const pageSize = paged ? Math.max(1, Number(query.get('pageSize')) || 100) : rows.length || 1
   const page = paged ? Math.max(1, Number(query.get('page')) || 1) : 1
   const columns = rows.length || search || kind !== 'collection' ? built.columns : collectionView === 'customer' ? ['customerName', 'phone', 'paidInvoices', 'paidAmount'] : ['Date', 'Order', 'Customer', 'Mode', 'Amount']
-  const summary = kind === 'invoice' ? { label: 'Total Invoice Amount', value: round(rows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0)), format: 'currency' } : kind === 'order' ? { label: 'Total Garment Count', value: rows.reduce((sum, row) => sum + (Number(row.totalGarments) || 0), 0), format: 'count' } : kind === 'customer' ? { label: 'Total Revenue', value: round(rows.reduce((sum, row) => sum + (Number(row.revenue) || 0), 0)), format: 'currency' } : kind === 'customer-package' ? { label: 'Total Package Amount', value: round(rows.reduce((sum, row) => sum + (Number(row.packageAmount) || 0), 0)), format: 'currency' } : kind === 'discount' ? { label: 'Total Discount Amount', value: round(rows.reduce((sum, row) => sum + (Number(row.discountAmount) || 0), 0)), format: 'currency' } : kind === 'expense' ? { label: 'Total Expense', value: round(rows.reduce((sum, row) => sum + (Number(row.expenseAmount) || 0), 0)), format: 'currency' } : kind === 'balance' ? { label: 'Total Balance Amount', value: round(rows.reduce((sum, row) => sum + (Number(row.balanceAmount) || 0), 0)), format: 'currency' } : undefined
+  const summary = kind === 'invoice' ? { label: 'Total Invoice Amount', value: round(rows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0)), format: 'currency' } : kind === 'order' ? { label: 'Total quantity (pieces and kg combined)', value: round(rows.reduce((sum, row) => sum + (Number(row.totalGarments) || 0), 0)), format: 'count' } : kind === 'customer' ? { label: 'Total Revenue', value: round(rows.reduce((sum, row) => sum + (Number(row.revenue) || 0), 0)), format: 'currency' } : kind === 'customer-package' ? { label: 'Total Package Amount', value: round(rows.reduce((sum, row) => sum + (Number(row.packageAmount) || 0), 0)), format: 'currency' } : kind === 'discount' ? { label: 'Total Discount Amount', value: round(rows.reduce((sum, row) => sum + (Number(row.discountAmount) || 0), 0)), format: 'currency' } : kind === 'expense' ? { label: 'Total Expense', value: round(rows.reduce((sum, row) => sum + (Number(row.expenseAmount) || 0), 0)), format: 'currency' } : kind === 'balance' ? { label: 'Total Balance Amount', value: round(rows.reduce((sum, row) => sum + (Number(row.balanceAmount) || 0), 0)), format: 'currency' } : undefined
   const emptyColumns = kind === 'balance' ? balanceView === 'customer' ? ['customer', 'phone', 'invoiceAmount', 'balanceAmount'] : ['customer', 'phone', 'invoiceNumber', 'orderNumber', 'invoiceAmount', 'balanceAmount'] : built.columns
   return { kind, from: kind === 'balance' ? null : from, to: kind === 'balance' ? null : to, columns: rows.length || search ? columns : emptyColumns, rows: paged ? rows.slice((page - 1) * pageSize, page * pageSize) : rows, totalRows: rows.length, page, pageSize, totalPages: Math.max(1, Math.ceil(rows.length / pageSize)), exportAll: !paged, ...(summary ? { summary } : {}) }
 }
