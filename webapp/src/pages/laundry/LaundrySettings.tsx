@@ -1274,10 +1274,10 @@ export default function LaundrySettings() {
                     }
                     className="h-4 w-4 accent-[#664cf0]"
                   />
-                  Allow tax
+                  Charge GST on orders
                 </label>
                 <p className="ml-7 mt-1 text-xs font-normal text-[#718087]">
-                  Turn this off to hide the store tax number from this profile.
+                  When on, new orders apply GST (18%) automatically and the GSTIN is shown on invoices. Turn it off if the store does not charge GST. Only the owner should change this.
                 </p>
               </div>
               {form.taxMode !== "none" ? (

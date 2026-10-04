@@ -35,6 +35,13 @@ async function loadCustomerPackages(get: (path: string) => Promise<any>, from: s
   return grouped.filter((item) => item.status !== 'Cancelled' && within(item.assigned))
 }
 
+async function loadRiderHandovers(get: (path: string) => Promise<any>, from: string | null, to: string | null): Promise<Data> {
+  const [settlements, staff] = await Promise.all([get('/vendor/rider-settlements').then((d) => listOf(d) as any[]).catch(() => [] as any[]), get('/vendor/employees?role=VENDOR_RIDER').then((d) => listOf(d, 'staff') as any[]).catch(() => [] as any[])])
+  const names = new Map<string, string>(staff.map((person) => [person.id, person.user_name || person.name || 'Captain']))
+  const handovers = settlements.map((entry) => ({ date: String(entry.settlementDate || entry.createdAt || '').slice(0, 10), rider: names.get(entry.riderEmployeeId) || 'Unknown rider', method: String(entry.method || '').toLowerCase().replace(/^./, (c: string) => c.toUpperCase()), amount: rupees(entry.amountPaise), reference: entry.reference || '', status: String(entry.status || '').toLowerCase().replace(/_/g, ' ').replace(/^./, (c: string) => c.toUpperCase()), orders: (entry.orderIds || []).length })).filter((row) => (!from || row.date >= from) && (!to || row.date <= to))
+  return { orders: [], raw: [], expenses: [], packages: [], customers: [], payments: [], handovers } as unknown as Data
+}
+
 async function loadCustomerList(get: (path: string) => Promise<any>, from: string | null, to: string | null): Promise<Data> {
   const records = listOf(await get('/vendor/counter/customers')) as Array<{ name?: string; displayName?: string; phone?: string; createdAt?: string; created_at?: string }>
   const customers = records.map((record) => ({
@@ -264,7 +271,9 @@ function table(kind: string, data: Data, collectionView: 'invoice' | 'customer' 
     }
     case 'pickup':
       return { columns: ['Order', 'Customer', 'Date', 'Mode', 'Captain', 'Status'], rows: live.filter((o) => /pickup/i.test(o.fulfillmentMode)).map((o) => ({ Order: o.orderNumber, Customer: o.customer.name, Date: day(o.createdAt), Mode: o.fulfillmentMode, Captain: o.pickupRider?.name || 'Unassigned', Status: o.state })) }
-    case 'rider-delivery': case 'rider-collection':
+    case 'rider-collection':
+      return { columns: ['date', 'rider', 'method', 'amount', 'reference', 'orders', 'status'], rows: ((data as unknown as { handovers?: any[] }).handovers || []) }
+    case 'rider-delivery':
       return { columns: ['Order', 'Customer', 'Due', 'Mode', 'Captain', 'Status', 'Amount'], rows: live.filter((o) => /delivery/i.test(o.fulfillmentMode)).map((o) => ({ Order: o.orderNumber, Customer: o.customer.name, Due: o.expectedDeliveryDate, Mode: o.fulfillmentMode, Captain: o.deliveryRider?.name || 'Unassigned', Status: o.state, Amount: o.grandTotal })) }
     default:
       return { columns: ['Note'], rows: [] }
@@ -279,6 +288,8 @@ async function detail(get: (p: string) => Promise<any>, kind: string, query: URL
     ? { orders: [], raw: [], expenses: [], packages: await loadCustomerPackages(get, from, to), payments: [] }
     : kind === 'customer-list'
       ? await loadCustomerList(get, from, to)
+    : kind === 'rider-collection'
+      ? await loadRiderHandovers(get, from, to)
     : await load(get, kind === 'balance' ? null : from, kind === 'balance' ? null : to, kind === 'collection', kind === 'balance', kind === 'collection' || kind === 'balance')
   const built = table(kind, data, collectionView, orderView, to || localDateKey(), search, from, balanceView)
   const rows = kind === 'growth' || kind === 'discount' || kind === 'expense' ? built.rows : built.rows.filter((row) => (!search || Object.values(row).join(' ').toLowerCase().includes(search)) && (!paymentMethod || kind !== 'collection' || collectionView !== 'invoice' || String(row.Mode || '').toLowerCase() === paymentMethod))

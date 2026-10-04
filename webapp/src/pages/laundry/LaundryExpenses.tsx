@@ -174,7 +174,7 @@ function ExpenseDialog({ initial, pending, error, cashShifts, onClose, onSave }:
               {openRegisters.map((register) => <option key={register} value={register}>{register}</option>)}
             </select>
           </label> : null}
-          {paymentMode === 'Cash' && cashShifts.length > 0 && openRegisters.length === 0 ? <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">No cash register is open. This expense will be recorded outside drawer closing.</p> : null}
+          {paymentMode === 'Cash' && cashShifts.length > 0 && openRegisters.length === 0 ? <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">No cash register is open. This expense is recorded outside the drawer total and will not count in cash closing. Open a register in Cash closing first if it should count.</p> : null}
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={tax} onChange={(event) => setTax(event.target.checked)} />
             Is Tax Paid?
