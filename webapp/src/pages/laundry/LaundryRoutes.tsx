@@ -115,7 +115,7 @@ export default function LaundryRoutes() {
     {routeActionError ? <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800">{routeActionError}</p> : null}
     <section className="rounded-[22px] border border-[#26203f]/10 bg-[#fcfbff] p-3 shadow-[0_8px_28px_rgba(35,25,66,.045)]">
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        <RouteMetric icon={<PackageCheck className="h-4 w-4" />} label="Ready work" value={String(totals?.orders || 0)} detail="Pickup + delivery demand" tone="bg-amber-100 text-amber-700" />
+        <RouteMetric icon={<PackageCheck className="h-4 w-4" />} label="Ready work" value={String(pickupWaiting + deliveryWaiting)} detail="Eligible pickup + delivery stops" tone="bg-amber-100 text-amber-700" />
         <RouteMetric icon={<Navigation className="h-4 w-4" />} label="Live runs" value={String(totals?.activeRoutes || 0)} detail="Planned or in progress" tone="bg-violet-100 text-violet-700" />
         <RouteMetric icon={<CheckCircle2 className="h-4 w-4" />} label="Closed stops" value={String(totals?.closedStops || 0)} detail={`${totals?.completionPercent || 0}% route closure`} tone="bg-emerald-100 text-emerald-700" />
         <RouteMetric icon={<MapPinned className="h-4 w-4" />} label="Zones" value={String(totals?.zones || 0)} detail="Service coverage" tone="bg-sky-100 text-sky-700" />
