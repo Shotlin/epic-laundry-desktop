@@ -113,7 +113,7 @@ export default function OrderSummaryPage({ id }: { id: string }) {
         <div className="flex flex-wrap gap-2">
           {canMove && !closed && nextState ? <Tile icon={<WashingMachine className="h-7 w-7 text-[#2563c2]" />} label={NEXT_WORDS[order.state] || `Mark ${nextState}`} onClick={() => setMove({ order, next: nextState })} /> : null}
           {canMove && order.state === 'Ready' ? <Tile icon={<CheckCircle2 className="h-7 w-7 text-green-600" />} label="Customer took it" onClick={() => setMove({ order, next: 'Delivered' })} /> : null}
-          {canPay && !closed && outstanding > 0 ? <Tile icon={<Wallet className="h-7 w-7 text-emerald-600" />} label="Take payment" onClick={() => { setPaying(true); setAmount(String(outstanding)) }} /> : null}
+          {canPay && !closed && outstanding > 0 ? <Tile icon={<Wallet className="h-7 w-7 text-emerald-600" />} label="Collect Payment" onClick={() => { setPaying(true); setAmount(String(outstanding)) }} /> : null}
           {canEdit && !closed ? <Tile icon={<Ban className="h-7 w-7 text-rose-600" />} label="Cancel order" tone="text-rose-700" onClick={() => setCancelling(true)} /> : null}
           <Tile icon={<FileText className="h-7 w-7 text-[#2563c2]" />} label="See bill" to={`/laundry/print-centre?order=${encodeURIComponent(order.id)}`} />
           <Tile icon={<Tag className="h-7 w-7 text-[#2563c2]" />} label="See tags" to={`/laundry/print-centre?order=${encodeURIComponent(order.id)}`} />
@@ -139,14 +139,17 @@ export default function OrderSummaryPage({ id }: { id: string }) {
       </section>
 
       <section className="rounded-3xl border border-[#263f44]/10 bg-white p-5 shadow-sm">
-        <h2 className="flex items-center gap-2 text-xl font-extrabold text-[#17353c]"><Wallet className="h-6 w-6 text-[#2563c2]" />Money</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="flex items-center gap-2 text-xl font-extrabold text-[#17353c]"><Wallet className="h-6 w-6 text-[#2563c2]" />Payment Summary</h2>
+          <span className={cn('rounded-full px-4 py-1.5 text-base font-extrabold', order.state === 'Cancelled' ? 'bg-rose-100 text-rose-800' : outstanding <= 0 ? 'bg-emerald-100 text-emerald-800' : paid > 0 ? 'bg-amber-100 text-amber-800' : 'bg-orange-100 text-orange-800')}>{order.state === 'Cancelled' ? 'Cancelled' : outstanding <= 0 ? 'Paid' : paid > 0 ? 'Part Paid' : 'Pending Payment'}</span></div>
         <dl className="mt-3 space-y-1.5 text-lg">
-          {rows.map((row) => <div key={row.label} className="flex justify-between"><dt className="text-[#617178]">{row.label}</dt><dd className="font-bold">{row.kind === 'discount' ? '−' : ''}{formatMoney(row.amount)}</dd></div>)}
-          <div className="flex justify-between border-t border-[#263f44]/10 pt-2 text-2xl font-extrabold text-[#2563c2]"><dt>Total</dt><dd>{formatMoney(order.grandTotal)}</dd></div>
-          <div className="flex justify-between text-emerald-700"><dt>Paid</dt><dd className="font-extrabold">{formatMoney(paid)}</dd></div>
-          <div className={cn('flex justify-between', outstanding > 0 ? 'text-rose-600' : 'text-emerald-700')}><dt>Still to pay</dt><dd className="font-extrabold">{formatMoney(outstanding)}</dd></div>
+          <div className="flex justify-between"><dt className="text-[#617178]">Item Total</dt><dd className="font-bold">{formatMoney(order.subtotal)}</dd></div>
+          {rows.filter((row) => row.kind !== 'subtotal' && row.kind !== 'tax').map((row) => <div key={row.label} className="flex justify-between"><dt className="text-[#617178]">{row.label}</dt><dd className="font-bold">{row.kind === 'discount' ? '−' : ''}{formatMoney(row.amount)}</dd></div>)}
+          <div className="flex justify-between"><dt className="text-[#617178]">Tax{order.taxRate ? ` (GST ${order.taxRate}%)` : ''}</dt><dd className="font-bold">{formatMoney(order.taxAmount || 0)}</dd></div>
+          <div className="flex justify-between border-t border-[#263f44]/10 pt-2 text-2xl font-extrabold text-[#2563c2]"><dt>Grand Total</dt><dd>{formatMoney(order.grandTotal)}</dd></div>
+          <div className="flex justify-between text-emerald-700"><dt>Paid Amount</dt><dd className="font-extrabold">{formatMoney(paid)}</dd></div>
+          <div className={cn('flex justify-between', outstanding > 0 ? 'text-rose-600' : 'text-emerald-700')}><dt>Balance Amount</dt><dd className="font-extrabold">{formatMoney(Math.max(0, outstanding))}</dd></div>
         </dl>
-        {canPay && !closed && outstanding > 0 && !paying ? <button type="button" onClick={() => { setPaying(true); setAmount(String(outstanding)) }} className="mt-4 h-14 w-full rounded-2xl bg-[#2563c2] text-lg font-extrabold text-white">Take payment</button> : null}
+        {!paying ? <button type="button" disabled={!canPay || closed || outstanding <= 0} onClick={() => { setPaying(true); setAmount(String(outstanding)) }} className="mt-4 h-14 w-full rounded-2xl bg-[#2563c2] text-lg font-extrabold text-white disabled:bg-[#a9b8cf]">{outstanding <= 0 ? 'Fully paid' : 'Collect Payment'}</button> : null}
         {paying ? <div className="mt-4 space-y-2 rounded-2xl bg-[#f4f8ff] p-3">
           <label className="block text-sm font-bold text-[#344c54]">Amount (₹)<input type="number" min="0.01" max={outstanding} step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} className="mt-1 h-12 w-full rounded-xl border border-[#263f44]/15 bg-white px-3 text-xl font-extrabold" /></label>
           <div className="grid grid-cols-4 gap-2">{['Cash', 'UPI', 'Card', 'Bank'].map((item) => <button key={item} type="button" onClick={() => setMode(item)} className={cn('h-12 rounded-xl border-2 text-sm font-extrabold', mode === item ? 'border-[#2563c2] bg-white text-[#2563c2]' : 'border-transparent bg-white text-[#617178]')}>{item}</button>)}</div>
