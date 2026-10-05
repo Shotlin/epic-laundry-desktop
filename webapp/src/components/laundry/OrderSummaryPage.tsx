@@ -28,11 +28,11 @@ const NEXT_WORDS: Partial<Record<LaundryState, string>> = { Booked: 'Start washi
 function parseBagNotes(notes: string | undefined) {
   const map = new Map<string, { alias?: string; inside: Array<{ name: string; count: number }>; stains?: string; extra: string[] }>()
   for (const line of String(notes || '').split('\n')) {
-    const match = /^(.+?) [\d.]+ kg — (.*)$/.exec(line.trim())
+    const match = /^(.+?) (?:[\d.]+ kg|x\d+) — (.*)$/.exec(line.trim())
     if (!match) continue
     const entry = { inside: [] as Array<{ name: string; count: number }>, extra: [] as string[] } as { alias?: string; inside: Array<{ name: string; count: number }>; stains?: string; extra: string[] }
     for (const part of match[2].split('; ')) {
-      const bag = /^bag "(.*)"$/.exec(part); const inside = /^inside: (.*)$/.exec(part); const stains = /^stains (.*)$/.exec(part)
+      const bag = /^(?:bag|alias) "(.*)"$/.exec(part); const inside = /^inside: (.*)$/.exec(part); const stains = /^stains (.*)$/.exec(part)
       if (bag) entry.alias = bag[1]
       else if (inside) entry.inside = inside[1].split(', ').map((chunk) => { const m = /^(.*) x(\d+)$/.exec(chunk); return { name: m ? m[1] : chunk, count: m ? Number(m[2]) : 1 } })
       else if (stains) entry.stains = stains[1]
@@ -121,23 +121,29 @@ export default function OrderSummaryPage({ id }: { id: string }) {
       </div>
       {cancelling ? <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-4"><p className="font-bold text-rose-800">Why are you cancelling this order?</p><input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Write the reason" className="mt-2 h-12 w-full rounded-xl border border-rose-300 bg-white px-4 text-base" /><div className="mt-3 flex gap-2"><button type="button" disabled={reason.trim().length < 3 || cancel.isPending} onClick={() => cancel.mutate()} className="h-11 rounded-xl bg-rose-600 px-5 font-bold text-white disabled:opacity-40">Yes, cancel it</button><button type="button" onClick={() => setCancelling(false)} className="h-11 rounded-xl border border-rose-300 bg-white px-5 font-bold text-rose-700">No, keep it</button></div></div> : null}
     </section>
-
-    <div className="grid gap-4 lg:grid-cols-[1.25fr_1fr]">
+    <section className="flex flex-wrap items-center gap-4 rounded-3xl border border-[#263f44]/10 bg-white p-4 shadow-sm">
+      <span className="grid h-14 w-14 place-items-center rounded-full bg-[#2563c2] text-xl font-extrabold text-white">{order.customer.name.slice(0, 1).toUpperCase()}</span>
+      <div className="min-w-0"><p className="text-xl font-extrabold text-[#17353c]">{order.customer.name} <span className="ml-2 text-base font-semibold text-[#617178]">{order.customer.phone}</span></p>{order.deliveryAddress ? <p className="flex items-center gap-2 text-sm text-[#617178]"><MapPin className="h-4 w-4" />{order.deliveryAddress}</p> : null}</div>
+      {order.customer.id ? <Link to={`/laundry/customers/${order.customer.id}`} className="ml-auto inline-flex items-center gap-2 rounded-xl bg-[#eef5ff] px-4 py-2.5 text-sm font-extrabold text-[#1e4fa0]"><User className="h-4 w-4" />Go to Profile</Link> : null}
+    </section>
+    <div className="grid gap-4 lg:grid-cols-[1.35fr_1fr_1fr]">
       <section className="rounded-3xl border border-[#263f44]/10 bg-white p-5 shadow-sm">
-        <h2 className="flex items-center gap-2 text-xl font-extrabold text-[#17353c]"><User className="h-6 w-6 text-[#2563c2]" />Customer</h2>
-        <div className="mt-3 flex items-center gap-4">
-          <span className="grid h-16 w-16 place-items-center rounded-full bg-[#2563c2] text-2xl font-extrabold text-white">{order.customer.name.slice(0, 1).toUpperCase()}</span>
-          <div><p className="text-xl font-extrabold text-[#17353c]">{order.customer.name}</p><p className="flex items-center gap-2 text-base text-[#617178]"><Phone className="h-4 w-4" />{order.customer.phone}</p>{order.deliveryAddress ? <p className="flex items-center gap-2 text-sm text-[#617178]"><MapPin className="h-4 w-4" />{order.deliveryAddress}</p> : null}</div>
-          {order.customer.id ? <Link to={`/laundry/customers/${order.customer.id}`} className="ml-auto rounded-xl border border-[#2563c2]/40 px-4 py-2 text-sm font-bold text-[#2563c2]">Open customer</Link> : null}
-        </div>
-        <div className="mt-4 grid grid-cols-2 gap-3 text-base">
-          <Info icon={<CalendarDays className="h-5 w-5" />} label="Order taken on" value={order.orderDate} />
-          <Info icon={<Clock3 className="h-5 w-5" />} label="Give back on" value={order.expectedDeliveryDate || '—'} />
-          <Info icon={<Truck className="h-5 w-5" />} label="How" value={order.fulfillmentMode || 'At store'} />
-          <Info icon={<CircleDollarSign className="h-5 w-5" />} label="Payment" value={order.paymentStatus || order.paymentMode} />
+        <h2 className="flex items-center gap-2 text-xl font-extrabold text-[#17353c]"><Truck className="h-6 w-6 text-[#2563c2]" />Order Information</h2>
+        <div className="mt-3 flex flex-wrap gap-2">{['Home Delivery', 'Pickup Order'].map((label) => <span key={label} className={cn('rounded-full border px-4 py-2 text-sm font-bold', (label === 'Home Delivery' ? /home|express/i : /pickup/i).test(order.fulfillmentMode || '') ? 'border-[#2563c2] bg-[#eef5ff] text-[#1e4fa0]' : 'border-[#263f44]/10 text-[#9aa7ab]')}>{label}</span>)}</div>
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <Info icon={<CalendarDays className="h-5 w-5" />} label="Booking Date" value={order.orderDate} />
+          <Info icon={<Truck className="h-5 w-5" />} label="Delivery Date" value={order.expectedDeliveryDate || '—'} />
+          <Info icon={<MapPin className="h-5 w-5" />} label="Address" value={order.deliveryAddress || 'At the store'} />
+          <Info icon={<Clock3 className="h-5 w-5" />} label="Delivery Type" value={order.fulfillmentMode || 'Store'} />
+          <Info icon={<User className="h-5 w-5" />} label="Order Type" value={order.source === 'MARKETPLACE' ? 'Online app' : 'By-Store'} />
+          <Info icon={<CircleDollarSign className="h-5 w-5" />} label="Payment Method" value={order.paymentMode || 'Pending'} />
+          <Info icon={<Tag className="h-5 w-5" />} label="Order No" value={order.orderNumber} />
         </div>
       </section>
-
+      <section className="rounded-3xl border border-[#263f44]/10 bg-white p-5 shadow-sm">
+        <h2 className="flex items-center gap-2 text-xl font-extrabold text-[#17353c]"><Clock3 className="h-6 w-6 text-[#2563c2]" />Order Timeline</h2>
+        <ol className="mt-3 space-y-2">{(order.timeline || []).slice().reverse().map((event, index) => <li key={event.id} className={cn('flex items-start gap-3 rounded-xl px-3 py-2', index === 0 ? 'bg-emerald-50' : '')}><CheckCircle2 className={cn('mt-0.5 h-5 w-5 shrink-0', index === 0 ? 'text-emerald-600' : 'text-[#9aa7ab]')} /><div className="flex-1"><p className="font-bold text-[#17353c]">{event.action}</p><p className="text-xs text-[#718087]">{new Date(event.ts).toLocaleString('en-IN')}</p></div>{index === 0 ? <span className="text-xs font-extrabold text-emerald-700">Current</span> : null}</li>)}</ol>
+      </section>
       <section className="rounded-3xl border border-[#263f44]/10 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="flex items-center gap-2 text-xl font-extrabold text-[#17353c]"><Wallet className="h-6 w-6 text-[#2563c2]" />Payment Summary</h2>
           <span className={cn('rounded-full px-4 py-1.5 text-base font-extrabold', order.state === 'Cancelled' ? 'bg-rose-100 text-rose-800' : outstanding <= 0 ? 'bg-emerald-100 text-emerald-800' : paid > 0 ? 'bg-amber-100 text-amber-800' : 'bg-orange-100 text-orange-800')}>{order.state === 'Cancelled' ? 'Cancelled' : outstanding <= 0 ? 'Paid' : paid > 0 ? 'Part Paid' : 'Pending Payment'}</span></div>
@@ -161,31 +167,35 @@ export default function OrderSummaryPage({ id }: { id: string }) {
     </div>
 
     <section className="rounded-3xl border border-[#263f44]/10 bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between"><h2 className="flex items-center gap-2 text-xl font-extrabold text-[#17353c]"><Shirt className="h-6 w-6 text-[#2563c2]" />Clothes in this order</h2><span className="rounded-full bg-[#eef5ff] px-3 py-1 text-sm font-bold text-[#1e4fa0]">{order.items.length} item{order.items.length === 1 ? '' : 's'}{pieces ? ` · ${pieces} pieces` : ''}</span></div>
-      <div className="mt-3 divide-y divide-[#263f44]/10">
+      <div className="flex items-center justify-between"><h2 className="flex items-center gap-2 text-xl font-extrabold text-[#17353c]"><Shirt className="h-6 w-6 text-[#2563c2]" />Garment Details</h2><span className="rounded-full bg-[#eef5ff] px-3 py-1 text-sm font-bold text-[#1e4fa0]">{order.items.length} Item(s){pieces ? ` · ${pieces} pieces` : ''}</span></div>
+      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[760px] text-left">
+        <thead className="bg-[#f7faf9] text-xs font-extrabold uppercase tracking-wide text-[#617178]"><tr><th className="px-3 py-3">#</th><th className="px-3 py-3">Item Name</th><th className="px-3 py-3">Quantity</th><th className="px-3 py-3">Unit Price</th><th className="px-3 py-3">Total Price</th><th className="px-3 py-3">Packaging</th><th className="px-3 py-3">Remarks</th></tr></thead>
+        <tbody className="divide-y divide-[#263f44]/10">
         {order.items.map((item, index) => {
           const garment = item.garment ? garmentById.get(item.garment) : undefined
           const image = garment?.photo || garmentVisuals[garment?.visual_key as keyof typeof garmentVisuals] || ''
           const bag = bags.get(item.garmentName.trim().toLowerCase())
-          return <article key={`${item.garment}:${item.service}:${index}`} className="grid gap-3 py-4 sm:grid-cols-[88px_1fr_auto]">
-            <span className="grid h-20 w-20 place-items-center overflow-hidden rounded-2xl bg-[#f1f4f3]">{image ? <img src={image} alt={item.garmentName} className="h-full w-full object-contain p-1.5" /> : <Shirt className="h-9 w-9 text-[#2563c2]" />}</span>
-            <div className="min-w-0">
-              <p className="text-lg font-extrabold uppercase text-[#17353c]">{item.garmentName}</p>
-              <p className="text-sm text-[#617178]">{garment?.categoryName ? `${garment.categoryName} · ` : ''}{item.serviceName}</p>
-              {bag?.alias ? <p className="mt-1 text-sm font-bold text-[#1e4fa0]">Bag: {bag.alias}</p> : null}
-              {bag?.inside.length ? <div className="mt-2 flex flex-wrap gap-1.5">{bag.inside.map((piece) => <span key={piece.name} className="rounded-full bg-[#eef5ff] px-3 py-1 text-xs font-extrabold uppercase text-[#1e4fa0]">{piece.name} × {piece.count}</span>)}</div> : null}
-              {bag?.stains ? <p className="mt-1 text-xs font-bold text-amber-800">Stains: {bag.stains}</p> : null}
-              {bag?.extra.length ? <p className="mt-1 text-xs text-[#617178]">{bag.extra.join('; ')}</p> : null}
-            </div>
-            <div className="text-right"><p className="text-base font-bold">{qtyWords(item)}</p><p className="text-sm text-[#617178]">{formatMoney(item.rate)} each</p><p className="text-xl font-extrabold text-[#17353c]">{formatMoney(item.amount)}</p></div>
-          </article>
+          return <tr key={`${item.garment}:${item.service}:${index}`} className="align-top">
+            <td className="px-3 py-4 text-lg font-extrabold text-[#17353c]">{index + 1}</td>
+            <td className="px-3 py-4"><div className="flex gap-3">
+              <span className="grid h-20 w-20 shrink-0 place-items-center overflow-hidden rounded-2xl bg-[#f1f4f3]">{image ? <img src={image} alt={item.garmentName} className="h-full w-full object-contain p-1.5" /> : <Shirt className="h-9 w-9 text-[#2563c2]" />}</span>
+              <div className="min-w-0">
+                <p className="text-lg font-extrabold uppercase text-[#17353c]">{item.garmentName} <span className="text-base font-bold normal-case text-[#617178]">({item.serviceName})</span></p>
+                {garment?.categoryName ? <p className="text-sm text-[#617178]">{garment.categoryName}</p> : null}
+                {bag?.alias ? <p className="mt-1 text-sm font-bold text-[#1e4fa0]">Name: {bag.alias}</p> : null}
+                {bag?.inside.length ? <div className="mt-2 flex flex-wrap gap-1.5">{bag.inside.map((piece) => <span key={piece.name} className="rounded-full bg-[#eef5ff] px-3 py-1 text-xs font-extrabold uppercase text-[#1e4fa0]">{piece.name} × {piece.count}</span>)}</div> : null}
+                {bag?.stains ? <p className="mt-1 text-xs font-bold text-amber-800">Stains: {bag.stains}</p> : null}
+                <span className={cn('mt-2 inline-block rounded-full px-3 py-1 text-xs font-extrabold', PLAIN[order.state].tone)}>{PLAIN[order.state].words}</span>
+              </div></div></td>
+            <td className="px-3 py-4 text-base font-bold">{qtyWords(item)}</td>
+            <td className="px-3 py-4 text-base">{formatMoney(item.rate)}</td>
+            <td className="px-3 py-4 text-lg font-extrabold text-[#17353c]">{formatMoney(item.amount)}</td>
+            <td className="px-3 py-4 text-sm text-[#617178]">{bag?.extra.find((part) => /^packaging /.test(part))?.replace(/^packaging /, '') || '—'}</td>
+            <td className="px-3 py-4 text-sm text-[#617178]">{bag?.extra.filter((part) => !/^packaging /.test(part)).join('; ') || '—'}</td>
+          </tr>
         })}
-      </div>
-    </section>
-
-    <section className="rounded-3xl border border-[#263f44]/10 bg-white p-5 shadow-sm">
-      <h2 className="flex items-center gap-2 text-xl font-extrabold text-[#17353c]"><PackageCheck className="h-6 w-6 text-[#2563c2]" />What happened</h2>
-      <ol className="mt-3 space-y-2">{(order.timeline || []).slice().reverse().map((event, index) => <li key={event.id} className={cn('flex items-start gap-3 rounded-xl px-3 py-2', index === 0 ? 'bg-emerald-50' : '')}><CheckCircle2 className={cn('mt-0.5 h-5 w-5 shrink-0', index === 0 ? 'text-emerald-600' : 'text-[#9aa7ab]')} /><div><p className="font-bold text-[#17353c]">{event.action}</p><p className="text-xs text-[#718087]">{new Date(event.ts).toLocaleString('en-IN')}</p></div></li>)}</ol>
+        </tbody></table></div>
+      {canEdit && !closed ? <div className="mt-4 text-center"><Link to={`/laundry/new-order?edit=${encodeURIComponent(order.id)}`} className="inline-flex h-12 items-center gap-2 rounded-xl border-2 border-emerald-500 bg-emerald-50 px-6 text-base font-extrabold text-emerald-800">+ Add More Items</Link></div> : null}
     </section>
 
     <OrderStatusDialog move={move} pending={transition.isPending} error={transition.error} onConfirm={(override) => move && transition.mutate({ move, override })} onClose={() => { transition.reset(); setMove(null) }} onReload={() => { transition.reset(); setMove(null); refresh() }} />

@@ -4,6 +4,7 @@ import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ApiError, apiGet, apiPatch, apiPost, apiPostOffline, operatorErrorMessage } from '@/lib/api'
 import { useVendorAccess } from '@/lib/vendorAccess'
+import PieceDetailsDialog from '@/components/laundry/PieceDetailsDialog'
 import WeightDialog from '@/components/laundry/WeightDialog'
 import { garmentVisuals, generatedVisualManifest } from '@/assets/generated/manifest'
 import type { LaundryCatalogue, LaundryOrder, LaundryQuote } from '@/lib/laundry'
@@ -15,7 +16,7 @@ import { canUseUi } from '@/lib/permissions'
 import { useDialogFocus } from '@/components/laundry/useDialogFocus'
 import { isWebOnly } from '@/lib/cloudAuth'
 
-type CartLine = { garment: string; service: string; qty: number; color?: string; garmentType?: string; rateOverride?: number; pieceCount?: number; alias?: string; breakdown?: Record<string, number>; stains?: string[]; remarks?: string }
+type CartLine = { garment: string; service: string; qty: number; color?: string; garmentType?: string; rateOverride?: number; pieceCount?: number; brand?: string; packaging?: string; defects?: string; alias?: string; breakdown?: Record<string, number>; stains?: string[]; remarks?: string }
 type Customer = { id: string; name: string; phone: string; email?: string; address?: string }
 type NewCustomerDraft = { name: string; phone: string; email: string; address: string }
 const blankNewCustomer: NewCustomerDraft = { name: '', phone: '', email: '', address: '' }
@@ -80,6 +81,7 @@ export default function LaundryBooking() {
   const [customerSearch, setCustomerSearch] = useState('')
   const [showNewCustomer, setShowNewCustomer] = useState(false)
   const [showQuickAddGarment, setShowQuickAddGarment] = useState(false)
+  const [detailsFor, setDetailsFor] = useState<{ garment: string; service: string } | null>(null)
   const [weightFor, setWeightFor] = useState<{ garment: string; service: string; garmentName: string; serviceName: string; categoryName: string; image: string } | null>(null)
   const [newCustomerDraft, setNewCustomerDraft] = useState<NewCustomerDraft>(blankNewCustomer)
   const [newCustomerName, setNewCustomerName] = useState('')
@@ -394,15 +396,25 @@ export default function LaundryBooking() {
     await queryClient.invalidateQueries({ queryKey: ['laundry-catalogue'] })
     return saved.id
   }
+  function openLineDetails(garmentId: string, serviceId: string): boolean {
+    const garment = garmentById.get(garmentId); const price = catalogue?.prices.find((item) => item.garment === garmentId && item.service === serviceId && !item.customer)
+    if (!garment || !price) return false
+    if (garment.unit === 'Kilogram') { setWeightFor({ garment: garmentId, service: serviceId, garmentName: price.garmentName, serviceName: price.serviceName, categoryName: garment.categoryName, image: garment.photo || garmentVisuals[garment.visual_key as keyof typeof garmentVisuals] || '' }); return true }
+    if (['Piece', 'Pair'].includes(garment.unit)) { setDetailsFor({ garment: garmentId, service: serviceId }); return true }
+    return false
+  }
   function composeNotes() {
     const details = Object.values(cart).map((line) => {
       const garment = garmentById.get(line.garment); const parts: string[] = []
-      if (line.alias) parts.push(`bag "${line.alias}"`)
+      if (line.alias) parts.push(`${garment?.unit === 'Kilogram' ? 'bag' : 'alias'} "${line.alias}"`)
       if (line.pieceCount) parts.push(`${line.pieceCount} pieces`)
       if (line.breakdown) parts.push(`inside: ${Object.entries(line.breakdown).map(([id, count]) => `${garmentById.get(id)?.name || 'item'} x${count}`).join(', ')}`)
       if (line.stains?.length) parts.push(`stains ${line.stains.join('/')}`)
       if (line.remarks) parts.push(line.remarks)
-      return parts.length ? `${garment?.name || 'Garment'} ${line.qty} kg — ${parts.join('; ')}` : ''
+      if (garment?.unit !== 'Kilogram') {
+        for (const [label, value] of [['color', line.color], ['brand', line.brand], ['packaging', line.packaging], ['defects', line.defects]] as const) if (value) parts.push(`${label} ${value}`)
+      }
+      return parts.length ? `${garment?.name || 'Garment'} ${garment?.unit === 'Kilogram' ? `${line.qty} kg` : `x${line.qty}`} — ${parts.join('; ')}` : ''
     }).filter(Boolean)
     return [notes.trim(), ...details].filter(Boolean).join('\n').slice(0, 1000)
   }
@@ -640,6 +652,7 @@ export default function LaundryBooking() {
         onClearSelection={() => { setCart({}); clearWalletRedemption() }}
         onRemoveLine={(garment, serviceId) => adjustLine(garment, serviceId, -100000)}
         onUpdateLine={setLineAttributes}
+        onOpenDetails={openLineDetails}
         hasBulkItems={hasBulkItems}
         containerCount={containerCount}
         setContainerCount={setContainerCount}
@@ -692,6 +705,7 @@ export default function LaundryBooking() {
       />
     </div>
     {showNewCustomer && <NewCustomerDialog draft={newCustomerDraft} setDraft={setNewCustomerDraft} pending={createCustomer.isPending} canSave={canSaveNewCustomer} supportsExtendedFields={!isWebOnly} error={createCustomer.error ? operatorErrorMessage(createCustomer.error, 'Could not save this customer. Check the details and try again.') : ''} onCancel={closeNewCustomerDialog} onSubmit={submitNewCustomer} />}
+    {detailsFor && catalogue ? (() => { const garment = garmentById.get(detailsFor.garment); const price = catalogue.prices.find((item) => item.garment === detailsFor.garment && item.service === detailsFor.service && !item.customer); const key = `${detailsFor.garment}:${detailsFor.service}`; if (!garment || !price || !cart[key]) return null; return <PieceDetailsDialog title={price.garmentName} subtitle={`${garment.categoryName} · ${price.serviceName} · ${garment.unit}`} unitLabel={garment.unit === 'Pair' ? 'pair' : 'piece'} image={garment.photo || garmentVisuals[garment.visual_key as keyof typeof garmentVisuals] || ''} rate={price.rate} initial={cart[key]} onCancel={() => setDetailsFor(null)} onSave={(details) => { setCart((previous) => ({ ...previous, [key]: { ...previous[key], ...details } })); setDetailsFor(null) }} /> })() : null}
     {weightFor && catalogue ? <WeightDialog title={weightFor.garmentName} subtitle={`${weightFor.categoryName} · ${weightFor.serviceName} · Kilogram`} unitLabel="kg" image={weightFor.image} rate={catalogue.prices.find((item) => item.garment === weightFor.garment && item.service === weightFor.service && !item.customer)?.rate} initial={cart[`${weightFor.garment}:${weightFor.service}`]} garments={catalogue.garments} categories={catalogue.categories} defaultCategory={catalogue.garments.find((item) => item.id === weightFor.garment)?.category} onCreateGarment={createPieceGarment} onCancel={() => setWeightFor(null)} onSave={(details) => { const key = `${weightFor.garment}:${weightFor.service}`; setCart((previous) => ({ ...previous, [key]: { ...previous[key], garment: weightFor.garment, service: weightFor.service, ...details } })); setWeightFor(null) }} /> : null}
     {showQuickAddGarment && canManageCatalogue && catalogue ? <QuickAddGarmentDialog catalogue={catalogue} defaultCategory={category} defaultService={service} pending={quickAddGarment.isPending} error={quickAddGarment.error instanceof Error ? quickAddGarment.error.message : ''} onCancel={() => { if (!quickAddGarment.isPending) { setShowQuickAddGarment(false); quickAddGarment.reset() } }} onSubmit={(input) => quickAddGarment.mutate(input)} /> : null}
     {receipt && <ReceiptDialog result={receipt} onClose={() => setReceipt(null)} />}
@@ -704,6 +718,7 @@ type OrderReviewPanelProps = {
   onClearSelection: () => void
   onRemoveLine: (garment: string, serviceId: string) => void
   onUpdateLine: (garment: string, serviceId: string, patch: Pick<CartLine, 'color' | 'garmentType' | 'rateOverride'>) => void
+  onOpenDetails: (garment: string, serviceId: string) => boolean
   hasBulkItems: boolean
   containerCount: string
   setContainerCount: (value: string) => void
@@ -755,7 +770,7 @@ type OrderReviewPanelProps = {
   onBook: () => void
 }
 
-function OrderReviewPanel({ quote, cart, onClearSelection, onRemoveLine, onUpdateLine, hasBulkItems, containerCount, setContainerCount, catalogue, chargeRuleIds, discountRuleIds, taxRuleId, taxRate, gstEnabled, onChargeChange, onDiscountChange, onTaxChange, charges, discounts, setCharges, setDiscounts, customChargeEnabled, customChargeValue, setCustomChargeEnabled, setCustomChargeValue, customDiscountType, customDiscountValue, setCustomDiscountType, setCustomDiscountValue, paymentMode, setPaymentMode, cashShifts, cashRegister, setCashRegister, paymentReference, setPaymentReference, isEditing, walletConfirmed, orderTrayTab, setOrderTrayTab, notes, setNotes, photoPath, setPhotoPath, photoError, setPhotoError, paymentLinkPending, paymentLinkIntent, paymentLinkError, onPreparePaymentLink, bookingError, canCommit, bookingPending, onBook }: OrderReviewPanelProps) {
+function OrderReviewPanel({ quote, cart, onClearSelection, onRemoveLine, onUpdateLine, onOpenDetails, hasBulkItems, containerCount, setContainerCount, catalogue, chargeRuleIds, discountRuleIds, taxRuleId, taxRate, gstEnabled, onChargeChange, onDiscountChange, onTaxChange, charges, discounts, setCharges, setDiscounts, customChargeEnabled, customChargeValue, setCustomChargeEnabled, setCustomChargeValue, customDiscountType, customDiscountValue, setCustomDiscountType, setCustomDiscountValue, paymentMode, setPaymentMode, cashShifts, cashRegister, setCashRegister, paymentReference, setPaymentReference, isEditing, walletConfirmed, orderTrayTab, setOrderTrayTab, notes, setNotes, photoPath, setPhotoPath, photoError, setPhotoError, paymentLinkPending, paymentLinkIntent, paymentLinkError, onPreparePaymentLink, bookingError, canCommit, bookingPending, onBook }: OrderReviewPanelProps) {
   const [editingLine, setEditingLine] = useState('')
   const isOnlinePayment = paymentMode === 'Card' || paymentMode === 'Bank' || paymentMode === 'UPI'
   const onlineMode = isOnlinePayment ? paymentMode : 'UPI'
@@ -782,7 +797,7 @@ function OrderReviewPanel({ quote, cart, onClearSelection, onRemoveLine, onUpdat
           const line = cart[lineKey]
           const editing = editingLine === lineKey
           return <div key={lineKey || `${item.garmentName}:${item.serviceName}`} className="px-3 py-3">
-            <div className="grid grid-cols-[minmax(0,1fr)_52px_65px_65px_52px] items-center gap-1"><div className="min-w-0"><p className="truncate text-sm font-extrabold text-[#253d42]">{item.garmentName}</p><p className="truncate text-xs text-[#74848a]">{item.serviceName}</p></div><span className="text-center text-sm font-bold tabular-nums text-[#30484e]">{item.qty}<span className="block text-[10px] font-medium text-[#74848a]">{unitLabel(item.unit || 'Piece')}</span></span><span className="text-right text-sm font-semibold tabular-nums text-[#51666a]">{formatMoney(item.rate)}<span className="block text-[10px] font-medium text-[#74848a]">/ {unitLabel(item.unit || 'Piece')}</span></span><span className="text-right text-sm font-extrabold tabular-nums text-[#17353c]">{formatMoney(item.amount)}</span><span className="flex justify-end gap-0.5"><button type="button" aria-label={`Edit ${item.garmentName}`} title="Edit item details" onClick={() => setEditingLine(editing ? '' : lineKey)} className="grid h-7 w-7 place-items-center rounded-md text-[#39786f] hover:bg-[#eaf3ef]"><Pencil className="h-3.5 w-3.5" /></button><button type="button" aria-label={`Remove ${item.garmentName}`} title="Remove item" onClick={() => onRemoveLine(item.garment || '', item.service || '')} className="grid h-7 w-7 place-items-center rounded-md text-[#c75a58] hover:bg-[#fff0ef]"><Trash2 className="h-3.5 w-3.5" /></button></span></div>
+            <div className="grid grid-cols-[minmax(0,1fr)_52px_65px_65px_52px] items-center gap-1"><div className="min-w-0"><p className="truncate text-sm font-extrabold text-[#253d42]">{item.garmentName}</p><p className="truncate text-xs text-[#74848a]">{item.serviceName}</p></div><span className="text-center text-sm font-bold tabular-nums text-[#30484e]">{item.qty}<span className="block text-[10px] font-medium text-[#74848a]">{unitLabel(item.unit || 'Piece')}</span></span><span className="text-right text-sm font-semibold tabular-nums text-[#51666a]">{formatMoney(item.rate)}<span className="block text-[10px] font-medium text-[#74848a]">/ {unitLabel(item.unit || 'Piece')}</span></span><span className="text-right text-sm font-extrabold tabular-nums text-[#17353c]">{formatMoney(item.amount)}</span><span className="flex justify-end gap-0.5"><button type="button" aria-label={`Edit ${item.garmentName}`} title="Edit garment details" onClick={() => { if (!onOpenDetails(item.garment || '', item.service || '')) setEditingLine(editing ? '' : lineKey) }} className="grid h-7 w-7 place-items-center rounded-md text-[#39786f] hover:bg-[#eaf3ef]"><Pencil className="h-3.5 w-3.5" /></button><button type="button" aria-label={`Remove ${item.garmentName}`} title="Remove item" onClick={() => onRemoveLine(item.garment || '', item.service || '')} className="grid h-7 w-7 place-items-center rounded-md text-[#c75a58] hover:bg-[#fff0ef]"><Trash2 className="h-3.5 w-3.5" /></button></span></div>
             {line?.breakdown || line?.pieceCount || line?.stains?.length || line?.alias ? <p className="mt-1 text-xs font-semibold text-[#1e4fa0]">{[line.alias ? `Bag: ${line.alias}` : '', line.pieceCount || line.breakdown ? `${line.pieceCount || Object.values(line.breakdown || {}).reduce((a, b) => a + b, 0)} pieces inside` : '', line.stains?.length ? `Stains: ${line.stains.join(', ')}` : ''].filter(Boolean).join(' · ')}</p> : null}
             {!['Piece', 'Pair'].includes(item.unit || 'Piece') ? <p className="mt-1 text-xs text-[#617178]">{item.qty} {unitLabel(item.unit)} × {formatMoney(item.rate)}/{unitLabel(item.unit)} = {formatMoney(item.amount)}</p> : null}
             {editing ? <div className="mt-2 grid grid-cols-3 gap-1.5 rounded-lg bg-[#f7faf9] p-2"><input value={line?.color || ''} onChange={(event) => onUpdateLine(item.garment || '', item.service || '', { color: event.target.value.slice(0, 40) })} placeholder="Colour" aria-label={`Colour for ${item.garmentName}`} className="h-7 min-w-0 rounded-md border border-[#263f44]/12 bg-white px-1.5 text-[10px] outline-none focus:border-[#2563c2]" /><select value={line?.garmentType || ''} onChange={(event) => onUpdateLine(item.garment || '', item.service || '', { garmentType: event.target.value })} aria-label={`Care type for ${item.garmentName}`} className="h-7 min-w-0 rounded-md border border-[#263f44]/12 bg-white px-1 text-[10px] outline-none focus:border-[#2563c2]"><option value="">Care type</option><option value="Standard">Standard</option><option value="Delicate">Delicate</option><option value="Stain treatment">Stain</option><option value="Other">Other</option></select><label className="relative"><span className="pointer-events-none absolute left-1.5 top-1.5 text-[10px] text-[#718087]">₹</span><input value={line?.rateOverride ?? ''} onChange={(event) => onUpdateLine(item.garment || '', item.service || '', { rateOverride: event.target.value === '' ? undefined : Number(event.target.value) })} type="number" min="0.01" max="1000000" step="0.01" placeholder="Price" aria-label={`Price override for ${item.garmentName}`} className="h-7 w-full rounded-md border border-[#263f44]/12 bg-white pl-4 pr-1 text-[10px] outline-none focus:border-[#2563c2]" /></label></div> : null}
