@@ -49,6 +49,7 @@ import { cn, formatDate, formatINR, formatMoney } from "@/lib/utils";
 import { summaryRows } from "@/lib/priceBreakdown";
 import OrderItemEditor from "@/components/laundry/OrderItemEditor";
 import VisualEmptyState from "@/components/laundry/VisualEmptyState";
+import OrderSummaryPage from "@/components/laundry/OrderSummaryPage";
 import { OrderStatusDialog, type StatusMove, type StatusOverride } from "@/components/laundry/OrderStatusDialog";
 import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { canUseUi } from "@/lib/permissions";
@@ -121,7 +122,7 @@ type CustomerDrawerProfile = {
 
 export default function LaundryOrders() {
   const { id: orderId } = useParams();
-  return orderId ? <OrderWorkCardPage id={orderId} /> : <StoreOrdersCustomersWorkspace />;
+  return orderId ? <OrderSummaryPage id={orderId} /> : <StoreOrdersCustomersWorkspace />;
 }
 
 function StoreOrdersCustomersWorkspace() {
@@ -342,9 +343,7 @@ function StoreOrdersCustomersWorkspace() {
     navigate(`/laundry/orders${params.size ? `?${params.toString()}` : ""}`, { replace: true });
   }
   function openOrderDrawer(id: string) {
-    setSelectedHistoryOrderId(null);
-    setSelectedCustomerId(null);
-    setSelectedOrderId(id);
+    navigate(`/laundry/orders/${encodeURIComponent(id)}`);
   }
   function openOrderHistory(id: string) {
     setSelectedOrderId(null);
