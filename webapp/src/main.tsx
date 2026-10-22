@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { HashRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./App";
+import { startLabelPrinter } from "@/lib/labelPrinter";
 import "@fontsource-variable/manrope";
 import "@fontsource-variable/noto-sans-devanagari";
 import "./index.css";
@@ -14,6 +15,9 @@ const queryClient = new QueryClient({
     queries: { refetchOnWindowFocus: false, staleTime: 15_000, retry: 1 },
   },
 });
+
+// Re-attach to the label printer this browser was already allowed to use — no login, no click.
+startLabelPrinter();
 
 class RendererErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null };

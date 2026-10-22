@@ -1,4 +1,5 @@
 import type { PrintSettings } from "@/lib/laundryPrint";
+import { printTagsDirect } from "@/lib/labelPrintDirect";
 import { labelToSvg, layoutTags, type LabelTag } from "@/lib/tagLabel";
 
 const escapeHtml = (value: unknown) =>
@@ -80,8 +81,9 @@ export type DocumentOutcome = { ok: boolean; evidence: string };
 /**
  * Sends a finished document to paper or to a PDF file.
  * - Desktop shell (window.epic present): its own print / printToPDF bridge, exactly as before.
- * - Website: tags → a real PDF generated in the browser and downloaded; anything else, or a print,
- *   → the browser's print dialog.
+ * - Website, tags, label printer connected: straight to the TSC printer over USB (TSPL), no dialog.
+ * - Website: tags → a real PDF generated in the browser and downloaded; anything else, or a print
+ *   (or a direct print that could not happen) → the browser's print dialog.
  */
 export async function deliverDocument(options: {
   html: string;
@@ -105,13 +107,21 @@ export async function deliverDocument(options: {
     await downloadTagsPdf(options.tags, options.settings, options.logoDataUrl, filename);
     return { ok: true, evidence: "PDF generated in the browser with a vector Code 128 barcode and downloaded" };
   }
+  let fallbackNote = "";
+  if (!pdf && options.tags?.length) {
+    const direct = await printTagsDirect(options.tags, options.settings, options.logoDataUrl);
+    if (direct.handled) return { ok: direct.ok, evidence: direct.evidence };
+    fallbackNote = direct.reason ? `${direct.reason} ` : "";
+  }
   const ok = await printHtmlDocument(html);
   return {
     ok,
-    evidence: ok
-      ? pdf
-        ? "Browser print dialog opened (choose Save as PDF); output not independently verified"
-        : "Browser print dialog opened; physical output not independently verified"
-      : "The print dialog could not be opened",
+    evidence: `${fallbackNote}${
+      ok
+        ? pdf
+          ? "Browser print dialog opened (choose Save as PDF); output not independently verified"
+          : "Browser print dialog opened; physical output not independently verified"
+        : "The print dialog could not be opened"
+    }`,
   };
 }

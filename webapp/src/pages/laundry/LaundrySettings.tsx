@@ -23,7 +23,8 @@ import {
 import { Link } from "react-router-dom";
 import QRCode from "qrcode";
 import { TagLabelPreview } from "@/components/laundry/TagFormatBar";
-import { PRINTER_DPI_OPTIONS, TAG_FORMATS, findTagFormat } from "@/lib/tagFormats";
+import { PRINTER_DPI_OPTIONS, TAG_FORMATS, findTagFormat, resolveTagFormat } from "@/lib/tagFormats";
+import { LabelPrinterPanel } from "@/components/laundry/LabelPrinterPanel";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { isWebOnly } from "@/lib/cloudAuth";
 
@@ -1917,6 +1918,14 @@ export default function LaundrySettings() {
       <GarmentBackfillPanel />
       </div> : null}
       {activeArea === "printing-setup" ? <div id="settings-panel-printing-setup" role="tabpanel" aria-labelledby="settings-tab-printing-setup" className="mt-6 space-y-6">
+        <div id="printer-connection" className="scroll-mt-24">
+          <LabelPrinterPanel
+            labelSize={(() => {
+              const format = resolveTagFormat(form.tagTemplate);
+              return { widthMm: format.widthMm, heightMm: format.heightMm, dpi: format.dpi, thermal: format.kind !== "a4" };
+            })()}
+          />
+        </div>
         <div id="printing-setup" className="scroll-mt-24">
           <TagTemplateConfiguratorV2
             businessName={form.businessName}

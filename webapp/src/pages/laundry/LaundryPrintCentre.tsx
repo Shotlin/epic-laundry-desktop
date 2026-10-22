@@ -23,9 +23,11 @@ import { formatINR, formatMoney } from "@/lib/utils";
 import { summaryRows } from "@/lib/priceBreakdown";
 import VisualEmptyState from "@/components/laundry/VisualEmptyState";
 import { TagFormatBar, TagLabelPreview } from "@/components/laundry/TagFormatBar";
+import { LabelPrinterPanel } from "@/components/laundry/LabelPrinterPanel";
 import {
   applyTagFormatOverride,
   readTagFormatOverride,
+  resolveTagFormat,
   writeTagFormatOverride,
   type TagFormatOverride,
 } from "@/lib/tagFormats";
@@ -668,6 +670,15 @@ function TagBatch({
             {selectedRows.length} selected
           </span>
         </div>
+      </div>
+      <div className="mt-5">
+        <LabelPrinterPanel
+          defaultOpen={false}
+          labelSize={(() => {
+            const format = resolveTagFormat(settings?.tagTemplate);
+            return { widthMm: format.widthMm, heightMm: format.heightMm, dpi: format.dpi, thermal: format.kind !== "a4" };
+          })()}
+        />
       </div>
       {tags.length ? (
         <TagFormatBar
