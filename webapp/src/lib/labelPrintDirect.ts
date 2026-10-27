@@ -38,7 +38,6 @@ function printDpi(fallback: number) {
 export async function printTagsDirect(tags: LabelTag[], settings: PrintSettings | undefined, logoDataUrl: string | undefined): Promise<DirectOutcome> {
   const before = getPrinterState();
   if (before.mode === "dialog") return { handled: false, reason: "" };
-  if (before.phase === "unsupported") return { handled: false, reason: "" };
   if (!before.remembered && before.phase !== "connected") return { handled: false, reason: "" };
   const { format, layouts } = layoutTags(tags, settings, logoDataUrl);
   if (format.kind === "a4") return { handled: false, reason: "An A4 sheet size is selected, so the browser print dialog was used. Pick a label size to print straight to the label printer." };
@@ -59,14 +58,15 @@ export async function printTagsDirect(tags: LabelTag[], settings: PrintSettings 
   await sleep(700);
   const condition = await readPrinterCondition();
   const where = `${live?.model || "label printer"}${live?.serial ? ` (S/N ${live.serial})` : ""}`;
-  const sent = `${layouts.length} label${layouts.length === 1 ? "" : "s"} sent straight to ${where} over USB at ${dpi} dpi`;
+  const route = live?.via === "agent" ? "through the Windows driver (LNDRY Print Agent)" : "over USB";
+  const sent = `${layouts.length} label${layouts.length === 1 ? "" : "s"} sent straight to ${where} ${route} at ${dpi} dpi`;
   if (condition && condition.problems.length) {
     return { handled: true, ok: false, evidence: `${sent}, but the printer reports: ${condition.problems.join(", ")}. Fix that and print again.` };
   }
   return {
     handled: true,
     ok: true,
-    evidence: `${sent}${condition ? "; printer status OK" : "; the printer did not report a status"}`,
+    evidence: `${sent}${condition ? (live?.via === "agent" ? "; Windows reports the printer ready" : "; printer status OK") : "; the printer did not report a status"}`,
   };
 }
 

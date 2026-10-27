@@ -1,12 +1,15 @@
-import { AlertTriangle, CheckCircle2, Loader2, Plug, Printer, RefreshCw, Unplug, Usb } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, Loader2, Plug, Printer, RefreshCw, Unplug, Usb } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useLabelPrinter } from "@/hooks/useLabelPrinter";
 import {
   connectPrinter,
+  connectUsbDirect,
+  detectAgent,
   disconnectPrinter,
   forgetPrinter,
-  reconnectPrinter,
   refreshCondition,
+  resumePrinter,
+  selectAgentPrinter,
   updatePrinterPrefs,
 } from "@/lib/labelPrinter";
 import { calibrateSensor, feedOneLabel, printSelfTest, printTestLabel } from "@/lib/labelPrintDirect";
@@ -46,6 +49,7 @@ export function LabelPrinterPanel({
   const connected = printer.phase === "connected";
   const problems = printer.condition?.problems || [];
   const modelDpi = shown ? expectedDpiForModel(shown.model) : undefined;
+  const windows = isWindows();
 
   async function run(name: string, work: () => Promise<string | boolean | void>) {
     setBusy(name);
@@ -110,14 +114,14 @@ export function LabelPrinterPanel({
             <Row label="Connection">
               <span className="inline-flex items-center gap-1.5">
                 <Usb className="h-3.5 w-3.5 text-[#39786f]" />
-                {connected ? "USB · connected" : "USB · not connected"}
+                {connected ? (printer.live?.via === "agent" ? "Windows driver · print agent" : "USB · direct") : "Not connected"}
               </span>
             </Row>
             <Row label="Printer says">
               {!connected ? "—" : printer.condition ? (problems.length ? problems.join(", ") : printer.condition.printing ? "Printing…" : "Ready") : "Connected (status not reported)"}
             </Row>
-            <Row label="USB ID">{shown ? `${hex(shown.vendorId)}:${hex(shown.productId)}` : "—"}</Row>
-            <Row label="Maker">{shown?.manufacturer || "—"}</Row>
+            <Row label="USB ID">{shown && shown.vendorId ? `${hex(shown.vendorId)}:${hex(shown.productId)}` : "—"}</Row>
+            <Row label="Maker / Windows printer">{shown ? [shown.manufacturer, shown.queue && shown.queue !== shown.model ? `queue “${shown.queue}”` : ""].filter(Boolean).join(" · ") || "—" : "—"}</Row>
             <Row label="Print resolution">{modelDpi ? `${modelDpi} dpi (from model)` : `${size.dpi} dpi (Printer resolution setting)`}</Row>
             <Row label="Last connected">{printer.remembered ? new Date(printer.remembered.lastConnectedAt).toLocaleString("en-IN") : "Never"}</Row>
           </div>
@@ -133,7 +137,7 @@ export function LabelPrinterPanel({
               <>
                 {printer.remembered ? (
                   <button type="button" disabled={Boolean(busy)} onClick={() => void run("reconnect", async () => {
-                    const ok = await reconnectPrinter();
+                    const ok = await resumePrinter();
                     return ok ? "Reconnected." : "Not found — check the cable and power, or use Connect printer.";
                   })} className="inline-flex items-center gap-1.5 rounded-lg bg-[#123039] px-3 py-2 text-xs font-bold text-white disabled:opacity-50">
                     <RefreshCw className="h-3.5 w-3.5" /> Reconnect
@@ -237,20 +241,67 @@ export function LabelPrinterPanel({
             </div>
           </details>
 
-          <details className="rounded-xl border border-[#263f44]/10 p-3" open={printer.phase === "error" || printer.phase === "unsupported" || (!printer.remembered && isWindows())}>
-            <summary className="cursor-pointer text-xs font-bold text-[#315d57]">Setup guide — first-time connection{isWindows() ? " (Windows)" : ""}</summary>
-            <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-xs leading-5 text-[#526368]">
-              <li>Use <strong>Google Chrome or Microsoft Edge</strong> on the computer the printer is plugged into, on the https website (not an app inside another program).</li>
-              <li>Connect the TSC printer with its USB cable, switch it on, and load labels (with the ribbon, unless the labels are direct-thermal).</li>
-              <li>Press <strong>Connect printer</strong> and choose the TSC printer in the browser's list. You do this once per computer — it reconnects on its own after that, even after signing out and in with another account.</li>
-              {isWindows() ? (
-                <li>
-                  <strong>Windows only:</strong> Windows gives a USB printer to one driver. TSC's normal printer driver keeps the printer away from the browser, so the printer shows no entry in the list. Switch <em>this printer</em> to the <strong>WinUSB</strong> driver once with the free <em>Zadig</em> tool (zadig.akeo.ie → Options → List all devices → pick the TSC printer → driver <em>WinUSB</em> → Replace Driver). Plug in only this printer while doing it. If you ever want the TSC driver back, uninstall the device in Device Manager and re-plug it.
-                </li>
+          <details className="rounded-xl border border-[#263f44]/10 p-3" open={!connected && (printer.phase === "error" || printer.phase === "unsupported" || windows)}>
+            <summary className="cursor-pointer text-xs font-bold text-[#315d57]">
+              Print through the Windows driver (LNDRY Print Agent){windows ? " — recommended on this PC" : ""}
+            </summary>
+            <div className="mt-3 space-y-3 text-xs leading-5 text-[#526368]">
+              <p>
+                If the TSC printer driver is installed on this PC (the normal case), the browser is not allowed to open the printer by itself. The print agent is a tiny helper that runs on this PC and hands labels to the printer <strong>through that same driver</strong> — nothing to remove or replace. Install it once; it starts by itself with Windows.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${printer.agent.phase === "running" ? "bg-[#eaf3ef] text-[#2e6a60]" : "bg-[#f3f5f1] text-[#617178]"}`}>
+                  {printer.agent.phase === "running" ? `Agent running · v${printer.agent.version}` : printer.agent.phase === "missing" ? "Agent not detected" : "Agent not checked yet"}
+                </span>
+                <a href={`${import.meta.env.BASE_URL}print-agent/Install-LndryPrintAgent.cmd`} download className="inline-flex items-center gap-1.5 rounded-lg bg-[#123039] px-3 py-2 text-xs font-bold text-white">
+                  <Download className="h-3.5 w-3.5" /> Download installer
+                </a>
+                <button type="button" disabled={Boolean(busy)} onClick={() => void run("detect", async () => ((await detectAgent()) ? "Print agent found and connected." : undefined))} className="inline-flex items-center gap-1.5 rounded-lg border border-[#263f44]/15 bg-white px-3 py-2 text-xs font-bold text-[#17353c] disabled:opacity-50">
+                  <RefreshCw className="h-3.5 w-3.5" /> Detect agent
+                </button>
+              </div>
+              {printer.agent.phase === "missing" && printer.agent.message ? <p className="rounded-lg bg-[#fff6e1] p-2.5 text-[#855815]">{printer.agent.message}</p> : null}
+              {printer.agent.phase === "running" ? (
+                <label className="block text-[11px] font-semibold text-[#526368]">
+                  Windows printer to use for labels
+                  <select
+                    className={`${field} mt-1`}
+                    value={printer.live?.via === "agent" ? printer.live.queue || "" : printer.agentPrinter}
+                    onChange={(event) => event.target.value && void run("pick", async () => ((await selectAgentPrinter(event.target.value)) ? `Using “${event.target.value}”.` : "That printer is no longer in Windows."))}
+                  >
+                    <option value="">Choose the TSC label printer…</option>
+                    {printer.agent.printers.map((item) => (
+                      <option key={item.name} value={item.name}>{item.name}{item.likelyTsc ? " — label printer" : ""}{item.offline ? " (offline)" : ""}</option>
+                    ))}
+                  </select>
+                </label>
               ) : null}
-              <li>Press <strong>Calibrate label sensor</strong> once for each new label size, then <strong>Print test label</strong>.</li>
-              <li>Prefer to keep the TSC Windows driver? Choose <em>Browser print dialog</em> above, create the label size in the driver (Printing Preferences → Stocks → User defined, width, height and gap), pick "Actual size / 100 %" and no headers in the browser dialog, and calibrate the sensor. Tags then print as before.</li>
-            </ol>
+              <ol className="list-decimal space-y-1 pl-5">
+                <li>Press <strong>Download installer</strong> and open the file (Chrome may ask you to keep it; Windows may say “protected your PC” — choose <em>More info → Run anyway</em>).</li>
+                <li>A black window shows the printers Windows has and says the agent is running.</li>
+                <li>Come back here, press <strong>Detect agent</strong>, and click <strong>Allow</strong> when Chrome asks to let this site reach apps on this device.</li>
+                <li>Pick the TSC printer above (or it picks it by itself when it is the only one), then <strong>Print test label</strong>.</li>
+              </ol>
+              <p className="text-[11px] text-[#718087]">Safe by design: it listens only on this PC, accepts requests only from this website, and cannot be used from other computers. To remove it, run the installer again from a command line with the word <code>uninstall</code>.</p>
+            </div>
+          </details>
+
+          <details className="rounded-xl border border-[#263f44]/10 p-3">
+            <summary className="cursor-pointer text-xs font-bold text-[#315d57]">Advanced — connect directly over USB (WinUSB driver)</summary>
+            <div className="mt-3 space-y-2 text-xs leading-5 text-[#526368]">
+              <p>Only if you do <strong>not</strong> need the TSC Windows driver for this printer. Windows gives a USB printer to one driver; with the TSC driver installed the browser cannot open it (you will see “Another program or the Windows printer driver is holding the printer”).</p>
+              <p>On Windows, switch this printer to the <strong>WinUSB</strong> driver once with the free <em>Zadig</em> tool (zadig.akeo.ie → Options → List all devices → pick the TSC printer → WinUSB → Replace Driver). The TSC driver then no longer works for it. Mac, Linux and Chromebook need nothing.</p>
+              <button type="button" disabled={Boolean(busy) || printer.phase === "unsupported"} onClick={() => void run("usb", async () => ((await connectUsbDirect()) ? "Printer connected over USB." : undefined))} className="inline-flex items-center gap-1.5 rounded-lg border border-[#263f44]/15 bg-white px-3 py-2 text-xs font-bold text-[#17353c] disabled:opacity-50">
+                <Usb className="h-3.5 w-3.5" /> Connect directly over USB
+              </button>
+            </div>
+          </details>
+
+          <details className="rounded-xl border border-[#263f44]/10 p-3">
+            <summary className="cursor-pointer text-xs font-bold text-[#315d57]">Prefer the browser print dialog?</summary>
+            <p className="mt-3 text-xs leading-5 text-[#526368]">
+              Choose <em>Browser print dialog</em> under “How tags are printed” above, create the label size in the TSC driver (Printing Preferences → Stocks → User defined: width, height, gap), pick “Actual size / 100 %” with no headers in the browser dialog, and calibrate the sensor. For no dialog at all, start Chrome with <code>--kiosk-printing</code> and set the TSC printer as the Windows default.
+            </p>
           </details>
         </div>
       ) : null}
